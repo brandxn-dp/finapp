@@ -306,7 +306,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         `SELECT rowid AS id, account_id, account_name, date, amount_cents, payee, memo, deleted_at,
                 external_id IS NOT NULL AS from_sync
          FROM deleted_txns
-         WHERE date IS NOT NULL
+         WHERE date IS NOT NULL AND deleted_account_ref IS NULL
          ORDER BY deleted_at DESC, rowid DESC
          LIMIT 500`
       )

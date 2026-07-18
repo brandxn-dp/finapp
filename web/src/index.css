@@ -25,6 +25,15 @@
   --good: #3e6b2a;
   --bad: #a1502c;
   --warn: #966b2f;
+  /* Skeuomorphic depth — pressed-paper emboss + soft drop */
+  --card-shadow: inset 0 1px 0 rgba(255, 253, 245, 0.7), inset 0 0 0 1px rgba(255, 253, 245, 0.25),
+    0 1px 2px rgba(60, 50, 25, 0.09), 0 14px 28px -18px rgba(50, 45, 20, 0.4);
+  --inset-shadow: inset 0 2px 3px rgba(60, 50, 25, 0.13), inset 0 -1px 0 rgba(255, 253, 245, 0.55);
+  --emboss: inset 0 1px 0 rgba(255, 253, 245, 0.4), 0 2px 3px rgba(60, 50, 25, 0.18);
+  --grain-opacity: 0.06;
+  --grain-blend: multiply;
+  /* Art Nouveau vine, top-right of cards */
+  --card-corner: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='74'%20height='74'%20viewBox='0%200%2074%2074'%20fill='none'%20stroke='%23857f63'%20stroke-opacity='0.4'%20stroke-width='1.1'%20stroke-linecap='round'%3E%3Cpath%20d='M74%2011%20C%2053%2011%2047%2028%2055%2038%20C%2059%2043%2068%2042%2068%2033%20C%2068%2028%2061%2026%2058%2029'/%3E%3Cpath%20d='M74%2011%20C%2068%2024%2072%2036%2061%2045'/%3E%3Ccircle%20cx='58'%20cy='29'%20r='1.4'%20fill='%23857f63'%20fill-opacity='0.4'%20stroke='none'/%3E%3C/svg%3E");
   --page-grad:
     radial-gradient(1100px 700px at 12% -8%, rgba(133, 152, 105, 0.13), transparent 60%),
     radial-gradient(900px 620px at 108% 12%, rgba(186, 152, 110, 0.14), transparent 55%),
@@ -47,6 +56,13 @@
   --good: #94c25e;
   --bad: #d08a5f;
   --warn: #c9a34f;
+  --card-shadow: inset 0 1px 0 rgba(240, 235, 215, 0.06), inset 0 0 0 1px rgba(240, 235, 215, 0.03),
+    0 2px 5px rgba(0, 0, 0, 0.35), 0 16px 30px -18px rgba(0, 0, 0, 0.7);
+  --inset-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45), inset 0 -1px 0 rgba(240, 235, 215, 0.05);
+  --emboss: inset 0 1px 0 rgba(240, 235, 215, 0.09), 0 2px 4px rgba(0, 0, 0, 0.4);
+  --grain-opacity: 0.05;
+  --grain-blend: screen;
+  --card-corner: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='74'%20height='74'%20viewBox='0%200%2074%2074'%20fill='none'%20stroke='%239db27a'%20stroke-opacity='0.32'%20stroke-width='1.1'%20stroke-linecap='round'%3E%3Cpath%20d='M74%2011%20C%2053%2011%2047%2028%2055%2038%20C%2059%2043%2068%2042%2068%2033%20C%2068%2028%2061%2026%2058%2029'/%3E%3Cpath%20d='M74%2011%20C%2068%2024%2072%2036%2061%2045'/%3E%3Ccircle%20cx='58'%20cy='29'%20r='1.4'%20fill='%239db27a'%20fill-opacity='0.32'%20stroke='none'/%3E%3C/svg%3E");
   --page-grad:
     radial-gradient(1000px 650px at 18% -10%, rgba(157, 178, 122, 0.09), transparent 60%),
     radial-gradient(820px 560px at 108% 18%, rgba(146, 106, 66, 0.1), transparent 55%),
@@ -92,9 +108,37 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Paper grain — a fixed, faint printed-page texture over the whole surface.
+   Sits behind app content; shows softly through the translucent glass cards. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='150'%20height='150'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.82'%20numOctaves='2'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3C/filter%3E%3Crect%20width='150'%20height='150'%20filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 150px 150px;
+}
+
 /* Range sliders in the app accent, both themes */
 input[type="range"] {
   accent-color: var(--accent);
+}
+
+/* ——— Skeuomorphic surfaces ——— */
+.card-skeu {
+  box-shadow: var(--card-shadow);
+  background-image: var(--card-corner);
+  background-repeat: no-repeat;
+  background-position: top right;
+}
+.field-skeu {
+  box-shadow: var(--inset-shadow);
+}
+.btn-emboss {
+  box-shadow: var(--emboss);
 }
 
 /* Lining tabular figures for anything numeric that must align */

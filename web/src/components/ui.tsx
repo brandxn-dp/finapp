@@ -188,7 +188,7 @@ export function Card({
   const [open, setOpen] = useState(!collapsible || defaultOpen);
   return (
     <section
-      className={`rounded-[14px] border border-line bg-[var(--glass)] shadow-[0_2px_12px_rgba(50,50,25,0.07)] outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-md ${className}`}
+      className={`card-skeu rounded-[14px] border border-line bg-[var(--glass)] outline outline-1 outline-line/50 outline-offset-[-5px] backdrop-blur-md ${className}`}
     >
       {(title || action) && (
         <header
@@ -247,7 +247,7 @@ export function Stat({
     </>
   );
   const frame =
-    "rounded-[14px] border border-line bg-[var(--glass)] px-5 py-4 outline outline-1 outline-line/60 outline-offset-[-4px] backdrop-blur-md";
+    "card-skeu rounded-[14px] border border-line bg-[var(--glass)] px-5 py-4 outline outline-1 outline-line/50 outline-offset-[-4px] backdrop-blur-md";
   if (onClick) {
     return (
       <button onClick={onClick} className={`${frame} block w-full cursor-pointer text-left transition-colors hover:bg-surface2/70`} title="Click for details">
@@ -268,7 +268,7 @@ export function Button({ variant = "primary", size = "md", className = "", ...re
     "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
   const sizes = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
   const variants = {
-    primary: "bg-accent text-accent-fg shadow-[0_1px_2px_rgba(0,0,0,0.15)] hover:brightness-108",
+    primary: "btn-emboss bg-accent text-accent-fg hover:brightness-108 active:translate-y-px",
     ghost: "border border-line bg-transparent text-ink hover:bg-surface2",
     subtle: "bg-surface2 text-ink hover:brightness-95 dark:hover:brightness-125",
     danger: "border border-line text-bad hover:bg-bad/10"
@@ -279,7 +279,7 @@ export function Button({ variant = "primary", size = "md", className = "", ...re
 export function Input({ className = "", ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={`h-9 rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink3 focus:outline-none focus:ring-2 focus:ring-accent/40 ${className}`}
+      className={`field-skeu h-9 rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink3 focus:outline-none focus:ring-2 focus:ring-accent/40 ${className}`}
       {...rest}
     />
   );
@@ -288,7 +288,7 @@ export function Input({ className = "", ...rest }: InputHTMLAttributes<HTMLInput
 export function Select({ className = "", children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
-      className={`h-9 rounded-lg border border-line bg-surface px-2.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 ${className}`}
+      className={`field-skeu h-9 rounded-lg border border-line bg-surface px-2.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 ${className}`}
       {...rest}
     >
       {children}

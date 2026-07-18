@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api";
-import type { Account, Category, Rule, Settings as AppSettings, TrashItem } from "../lib/api";
+import type { Account, Category, DeletedAccount, Rule, Settings as AppSettings, TrashItem } from "../lib/api";
 import { money, shortDate } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
@@ -26,6 +26,7 @@ export default function Settings() {
       <RulesCard />
       <CategoriesCard />
       <TrashCard />
+      <DangerZoneCard />
       <p className="text-[11px] text-ink3">
         FinApp is self-hosted: your data lives in a single SQLite file on your server. Deleted transactions sit in
         the Trash above and are remembered so bank syncs can't re-import them. The AI features send only
@@ -296,6 +297,7 @@ function AiCard() {
 function AccountsCard() {
   const { data: accounts, refetch } = useApi<Account[]>("/api/accounts");
   const [name, setName] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const { toast } = useToast();
 
   const add = async () => {
@@ -310,11 +312,33 @@ function AccountsCard() {
     refetch();
   };
 
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const remove = async (a: Account) => {
-    if (!window.confirm(`Delete "${a.name}" and its ${a.txn_count} transactions? This cannot be undone.`)) return;
+    if (!window.confirm(`Move "${a.name}" and its ${a.txn_count} transactions to the trash? You can restore it from Trash below.`)) return;
     try {
       await api.del(`/api/accounts/${a.id}`);
-      toast(`Deleted ${a.name}.`, "info");
+      toast(`Moved ${a.name} to the trash.`, "info");
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  const bulkDelete = async () => {
+    const chosen = (accounts ?? []).filter((a) => selected.has(a.id));
+    const txnTotal = chosen.reduce((s, a) => s + a.txn_count, 0);
+    if (!window.confirm(`Move ${chosen.length} accounts (${txnTotal} transactions) to the trash? Restorable from Trash below.`)) return;
+    try {
+      const r = await api.post<{ deleted: number }>("/api/accounts/bulk-delete", { ids: [...selected] });
+      toast(`Moved ${r.deleted} accounts to the trash.`, "good");
+      setSelected(new Set());
       refetch();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), "bad");
@@ -342,14 +366,37 @@ function AccountsCard() {
       defaultOpen={false}
       summary={`${accounts?.length ?? 0} accounts · ${money(total)} net`}
       action={
-        <Button size="sm" variant="ghost" onClick={autoType} title="Guess types (savings, credit, loan…) from account names">
-          <Icon name="sparkle" size={14} /> Auto-detect types
-        </Button>
+        selected.size > 0 ? (
+          <Button size="sm" variant="danger" onClick={bulkDelete}>
+            <Icon name="trash" size={14} /> Delete {selected.size} selected
+          </Button>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={autoType} title="Guess types (savings, credit, loan…) from account names">
+            <Icon name="sparkle" size={14} /> Auto-detect types
+          </Button>
+        )
       }
     >
+      {accounts && accounts.length > 0 && (
+        <label className="mb-1 flex items-center gap-2 pb-1 text-xs text-ink3">
+          <input
+            type="checkbox"
+            checked={accounts.every((a) => selected.has(a.id))}
+            onChange={(e) => setSelected(e.target.checked ? new Set(accounts.map((a) => a.id)) : new Set())}
+            className="h-3.5 w-3.5 accent-[var(--accent)]"
+          />
+          Select all
+        </label>
+      )}
       <ul className="divide-y divide-line">
         {accounts?.map((a) => (
-          <li key={a.id} className="flex flex-wrap items-center gap-3 py-2.5 first:pt-0">
+          <li key={a.id} className={`flex flex-wrap items-center gap-3 py-2.5 first:pt-0 ${selected.has(a.id) ? "bg-accent/8" : ""}`}>
+            <input
+              type="checkbox"
+              checked={selected.has(a.id)}
+              onChange={() => toggle(a.id)}
+              className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+            />
             <div className="min-w-0 flex-1">
               <div className="text-sm text-ink">
                 {a.name}
@@ -504,6 +551,7 @@ function RulesCard() {
 
 function TrashCard() {
   const { data: items, refetch } = useApi<TrashItem[]>("/api/trash");
+  const { data: accounts, refetch: refetchAccounts } = useApi<DeletedAccount[]>("/api/trash/accounts");
   const { toast } = useToast();
 
   const restore = async (t: TrashItem) => {
@@ -516,39 +564,123 @@ function TrashCard() {
     }
   };
 
+  const restoreAccount = async (a: DeletedAccount) => {
+    try {
+      const r = await api.post<{ restored: number }>(`/api/trash/accounts/${a.id}/restore`);
+      toast(`Restored ${a.name} with ${r.restored} transactions.`, "good");
+      refetchAccounts();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  const count = (items?.length ?? 0) + (accounts?.length ?? 0);
   return (
     <Card
       title="Trash"
       collapsible
       defaultOpen={false}
-      summary={`${items?.length ?? 0} deleted transactions`}
+      summary={`${accounts?.length ?? 0} accounts · ${items?.length ?? 0} transactions`}
     >
       <p className="mb-3 text-xs text-ink3">
-        Deleted transactions land here and stay remembered, so bank syncs and CSV re-imports can't quietly bring
-        them back. Restore anything you deleted by mistake.
+        Deleted accounts and transactions land here and stay remembered, so bank syncs and CSV re-imports can't
+        quietly bring them back. Restore anything you removed by mistake — restoring an account brings its
+        transactions with it.
       </p>
-      {!items || items.length === 0 ? (
-        <p className="py-4 text-center text-sm text-ink3">The trash is empty.</p>
-      ) : (
-        <div className="max-h-96 overflow-y-auto">
-          {items.map((t) => (
-            <div key={t.id} className="flex items-center gap-3 border-b border-line py-2 text-sm last:border-0">
-              <span className="tnum w-14 shrink-0 text-xs text-ink2">{shortDate(t.date)}</span>
+
+      {accounts && accounts.length > 0 && (
+        <div className="mb-4">
+          <div className="smallcaps mb-1.5 text-[11px] font-medium text-ink3">Deleted accounts</div>
+          {accounts.map((a) => (
+            <div key={a.id} className="flex items-center gap-3 border-b border-line py-2 text-sm last:border-0">
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-ink">{t.payee || "(no payee)"}</span>
+                <span className="block truncate text-ink">{a.name}</span>
                 <span className="text-[11px] text-ink3">
-                  {t.account_name ?? "unknown account"} · {t.from_sync ? "bank sync" : "CSV import"} · deleted{" "}
-                  {new Date(t.deleted_at + "Z").toLocaleDateString()}
+                  {a.type ?? "account"} · {a.txn_count} transactions · deleted{" "}
+                  {new Date(a.deleted_at + "Z").toLocaleDateString()}
                 </span>
               </span>
-              <span className="tnum shrink-0 font-medium text-ink">{money(t.amount_cents)}</span>
-              <Button size="sm" variant="ghost" onClick={() => restore(t)}>
+              <span className="tnum shrink-0 text-ink2">{money(a.balance_cents ?? 0)}</span>
+              <Button size="sm" variant="ghost" onClick={() => restoreAccount(a)}>
                 Restore
               </Button>
             </div>
           ))}
         </div>
       )}
+
+      {count === 0 ? (
+        <p className="py-4 text-center text-sm text-ink3">The trash is empty.</p>
+      ) : items && items.length > 0 ? (
+        <div>
+          {accounts && accounts.length > 0 && (
+            <div className="smallcaps mb-1.5 text-[11px] font-medium text-ink3">Deleted transactions</div>
+          )}
+          <div className="max-h-96 overflow-y-auto">
+            {items.map((t) => (
+              <div key={t.id} className="flex items-center gap-3 border-b border-line py-2 text-sm last:border-0">
+                <span className="tnum w-14 shrink-0 text-xs text-ink2">{shortDate(t.date)}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-ink">{t.payee || "(no payee)"}</span>
+                  <span className="text-[11px] text-ink3">
+                    {t.account_name ?? "unknown account"} · {t.from_sync ? "bank sync" : "CSV import"} · deleted{" "}
+                    {new Date(t.deleted_at + "Z").toLocaleDateString()}
+                  </span>
+                </span>
+                <span className="tnum shrink-0 font-medium text-ink">{money(t.amount_cents)}</span>
+                <Button size="sm" variant="ghost" onClick={() => restore(t)}>
+                  Restore
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function DangerZoneCard() {
+  const { toast } = useToast();
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const reset = async () => {
+    setBusy(true);
+    try {
+      await api.post("/api/factory-reset", { confirm: "DELETE EVERYTHING" });
+      toast("All data erased. FinApp is back to a fresh install.", "info");
+      setConfirm("");
+      // Full reload so every page drops its cached data
+      setTimeout(() => window.location.assign("/"), 800);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="Danger zone" collapsible defaultOpen={false} summary="Factory reset">
+      <div className="rounded-xl border border-bad/40 bg-bad/5 p-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-bad">
+          <Icon name="alert" size={16} /> Factory reset
+        </div>
+        <p className="mt-1.5 text-xs text-ink2">
+          Permanently deletes <strong>everything</strong> — all accounts, transactions, budgets, debts, rules, the
+          trash, your API key, and the SimpleFIN connection — and restores the default categories. This cannot be
+          undone. Consider backing up your <code className="rounded bg-surface2 px-1 py-0.5">/data</code> volume first.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-ink2">
+            Type <code className="rounded bg-surface2 px-1.5 py-0.5 font-medium">DELETE EVERYTHING</code> to confirm:
+          </span>
+          <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="DELETE EVERYTHING" className="w-48" />
+          <Button variant="danger" onClick={reset} disabled={busy || confirm !== "DELETE EVERYTHING"}>
+            {busy ? <Spinner /> : <Icon name="trash" size={14} />} Erase all data
+          </Button>
+        </div>
+      </div>
     </Card>
   );
 }

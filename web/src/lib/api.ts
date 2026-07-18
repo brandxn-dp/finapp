@@ -259,6 +259,15 @@ export interface TrashItem {
   from_sync: number;
 }
 
+export interface DeletedAccount {
+  id: number;
+  name: string;
+  type: string | null;
+  balance_cents: number | null;
+  txn_count: number;
+  deleted_at: string;
+}
+
 export interface Rule {
   id: number;
   pattern: string;

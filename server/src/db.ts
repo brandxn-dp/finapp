@@ -90,6 +90,19 @@ CREATE TABLE IF NOT EXISTS deleted_txns (
 CREATE INDEX IF NOT EXISTS idx_deleted_ext  ON deleted_txns(account_id, external_id);
 CREATE INDEX IF NOT EXISTS idx_deleted_hash ON deleted_txns(account_id, import_hash);
 
+-- Snapshots of deleted accounts, so a whole account (and its transactions) can be restored
+CREATE TABLE IF NOT EXISTS deleted_accounts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  orig_id       INTEGER,
+  name          TEXT NOT NULL,
+  type          TEXT,
+  currency      TEXT,
+  balance_cents INTEGER,
+  simplefin_id  TEXT,
+  txn_count     INTEGER NOT NULL DEFAULT 0,
+  deleted_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS debts (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   name              TEXT NOT NULL,
@@ -138,7 +151,10 @@ const DEFAULT_CATEGORIES: Array<[name: string, grp: string, kind: string, icon: 
     ["payee", "TEXT"],
     ["memo", "TEXT"],
     ["category_id", "INTEGER"],
-    ["account_name", "TEXT"]
+    ["account_name", "TEXT"],
+    // Links a tombstoned txn to the deleted_accounts row it went down with, so
+    // restoring the account brings its transactions back as a group.
+    ["deleted_account_ref", "INTEGER"]
   ];
   for (const [name, type] of add) {
     if (!cols.has(name)) db.exec(`ALTER TABLE deleted_txns ADD COLUMN ${name} ${type}`);
@@ -171,4 +187,34 @@ export function setSetting(key: string, value: string): void {
 
 export function deleteSetting(key: string): void {
   db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+}
+
+/**
+ * Wipe every row of user data and re-seed the default categories — a true
+ * factory reset. Also clears settings (API key, SimpleFIN connection). The DB
+ * file itself stays; the app comes back up empty as if freshly installed.
+ */
+export function factoryReset(): void {
+  const TABLES = [
+    "transactions",
+    "deleted_txns",
+    "deleted_accounts",
+    "merchant_cache",
+    "budgets",
+    "rules",
+    "recurring_overrides",
+    "debts",
+    "accounts",
+    "categories",
+    "settings"
+  ];
+  const run = db.transaction(() => {
+    for (const t of TABLES) db.prepare(`DELETE FROM ${t}`).run();
+    const ins = db.prepare(
+      "INSERT INTO categories (name, grp, kind, icon, is_default) VALUES (?, ?, ?, ?, 1)"
+    );
+    for (const [name, grp, kind, icon] of DEFAULT_CATEGORIES) ins.run(name, grp, kind, icon);
+  });
+  run();
+  db.pragma("wal_checkpoint(TRUNCATE)");
 }

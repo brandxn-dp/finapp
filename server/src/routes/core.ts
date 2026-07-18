@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { db, getSetting, setSetting, deleteSetting } from "../db.js";
+import { db, getSetting, setSetting, deleteSetting, factoryReset } from "../db.js";
 import { applyRules } from "../services/categorizer.js";
 import { isConnected, lastSync } from "../services/simplefin.js";
 import { resolveLlmConfig } from "../services/llm.js";
-import { inferAccountType } from "../util.js";
+import { inferAccountType, normalizePayee } from "../util.js";
 
 export function registerCoreRoutes(app: FastifyInstance): void {
   // ----- Accounts -----
@@ -69,10 +69,185 @@ export function registerCoreRoutes(app: FastifyInstance): void {
     return { changed: changes.length, changes };
   });
 
+  /**
+   * Move an account to the trash: snapshot the account and every one of its
+   * transactions (tagged with the deleted-account ref) so the whole thing can
+   * be restored later, then delete it. Returns false if the account is gone.
+   */
+  const trashAccount = db.transaction((id: number): boolean => {
+    const account = db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as
+      | {
+          id: number;
+          name: string;
+          type: string;
+          currency: string;
+          balance_cents: number;
+          simplefin_id: string | null;
+        }
+      | undefined;
+    if (!account) return false;
+
+    const txns = db
+      .prepare("SELECT * FROM transactions WHERE account_id = ?")
+      .all(id) as Array<{
+      account_id: number;
+      external_id: string | null;
+      import_hash: string | null;
+      date: string;
+      amount_cents: number;
+      payee: string;
+      memo: string;
+      category_id: number | null;
+    }>;
+
+    const ref = db
+      .prepare(
+        `INSERT INTO deleted_accounts (orig_id, name, type, currency, balance_cents, simplefin_id, txn_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(id, account.name, account.type, account.currency, account.balance_cents, account.simplefin_id, txns.length)
+      .lastInsertRowid as number;
+
+    const snap = db.prepare(
+      `INSERT INTO deleted_txns (account_id, external_id, import_hash, date, amount_cents, payee, memo, category_id, account_name, deleted_account_ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const t of txns) {
+      snap.run(
+        t.account_id,
+        t.external_id,
+        t.import_hash,
+        t.date,
+        t.amount_cents,
+        t.payee,
+        t.memo,
+        t.category_id,
+        account.name,
+        ref
+      );
+    }
+
+    // Cascade removes the transactions; we've already snapshotted them
+    db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+    return true;
+  });
+
   app.delete("/api/accounts/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const info = db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
-    if (info.changes === 0) return reply.code(404).send({ error: "Account not found." });
+    if (!trashAccount(id)) return reply.code(404).send({ error: "Account not found." });
+    return { ok: true };
+  });
+
+  app.post("/api/accounts/bulk-delete", async (req, reply) => {
+    const b = req.body as { ids?: number[] };
+    if (!Array.isArray(b?.ids) || b.ids.length === 0) {
+      return reply.code(400).send({ error: "ids array is required." });
+    }
+    let deleted = 0;
+    for (const id of b.ids) if (Number.isInteger(id) && trashAccount(id)) deleted++;
+    return { deleted };
+  });
+
+  // ----- Account trash -----
+
+  app.get("/api/trash/accounts", async () => {
+    return db
+      .prepare(
+        `SELECT id, name, type, balance_cents, txn_count, deleted_at FROM deleted_accounts
+         ORDER BY deleted_at DESC, id DESC LIMIT 200`
+      )
+      .all();
+  });
+
+  /** Recreate a deleted account and re-insert its snapshotted transactions. */
+  app.post("/api/trash/accounts/:id/restore", async (req, reply) => {
+    const refId = Number((req.params as { id: string }).id);
+    const acct = db.prepare("SELECT * FROM deleted_accounts WHERE id = ?").get(refId) as
+      | {
+          id: number;
+          name: string;
+          type: string | null;
+          currency: string | null;
+          balance_cents: number | null;
+          simplefin_id: string | null;
+        }
+      | undefined;
+    if (!acct) return reply.code(404).send({ error: "Deleted account not found." });
+
+    const run = db.transaction(() => {
+      // If the bank was already re-synced into a new account with the same
+      // SimpleFIN id, restore the transactions into that one; else recreate it.
+      let targetId: number;
+      const existing = acct.simplefin_id
+        ? (db.prepare("SELECT id FROM accounts WHERE simplefin_id = ?").get(acct.simplefin_id) as
+            | { id: number }
+            | undefined)
+        : undefined;
+      if (existing) {
+        targetId = existing.id;
+      } else {
+        targetId = db
+          .prepare(
+            "INSERT INTO accounts (name, type, currency, balance_cents, simplefin_id) VALUES (?, ?, ?, ?, ?)"
+          )
+          .run(
+            acct.name,
+            acct.type ?? "checking",
+            acct.currency ?? "USD",
+            acct.balance_cents ?? 0,
+            acct.simplefin_id
+          ).lastInsertRowid as number;
+      }
+
+      const snaps = db.prepare("SELECT * FROM deleted_txns WHERE deleted_account_ref = ?").all(refId) as Array<{
+        rowid?: number;
+        external_id: string | null;
+        import_hash: string | null;
+        date: string | null;
+        amount_cents: number | null;
+        payee: string | null;
+        memo: string | null;
+        category_id: number | null;
+      }>;
+      const insert = db.prepare(
+        `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, category_id, external_id, import_hash)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM transactions x WHERE x.account_id = ? AND x.external_id IS NOT NULL AND x.external_id = ?)`
+      );
+      let restored = 0;
+      for (const s of snaps) {
+        if (s.date === null || s.amount_cents === null) continue;
+        const cat = s.category_id
+          ? db.prepare("SELECT id FROM categories WHERE id = ?").get(s.category_id)
+          : null;
+        restored += insert.run(
+          targetId,
+          s.date,
+          s.amount_cents,
+          s.payee ?? "",
+          normalizePayee(s.payee ?? ""),
+          s.memo ?? "",
+          cat ? s.category_id : null,
+          s.external_id,
+          s.import_hash,
+          targetId,
+          s.external_id
+        ).changes;
+      }
+      db.prepare("DELETE FROM deleted_txns WHERE deleted_account_ref = ?").run(refId);
+      db.prepare("DELETE FROM deleted_accounts WHERE id = ?").run(refId);
+      return restored;
+    });
+    return { ok: true, restored: run() };
+  });
+
+  /** Danger zone: wipe all data and re-seed defaults. Requires an explicit confirm token. */
+  app.post("/api/factory-reset", async (req, reply) => {
+    const b = req.body as { confirm?: string };
+    if (b?.confirm !== "DELETE EVERYTHING") {
+      return reply.code(400).send({ error: "Missing confirmation token." });
+    }
+    factoryReset();
     return { ok: true };
   });
 

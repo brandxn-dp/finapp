@@ -1,9 +1,9 @@
 import { Link } from "react-router-dom";
 import { useApi } from "../lib/api";
-import type { Overview, RecurringItem } from "../lib/api";
+import type { Account, Overview, RecurringItem } from "../lib/api";
 import { money } from "../lib/format";
 import { useChartColors } from "../lib/theme";
-import { Card, Empty, Spinner } from "../components/ui";
+import { Card, Empty, PageHeader, Spinner } from "../components/ui";
 import { LegendRow } from "../components/charts";
 
 export default function Savings() {
@@ -22,17 +22,14 @@ export default function Savings() {
 
   return (
     <div className="space-y-5">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">Savings</h1>
-        <p className="mt-0.5 text-sm text-ink2">
-          Popular saving methods, measured against your real numbers.
-        </p>
-      </header>
+      <PageHeader title="Savings" sub="Popular saving methods, measured against your real numbers." />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <FiftyThirtyTwentyCard ov={ov} />
         <EmergencyFundCard ov={ov} />
       </div>
+
+      <SavingsAccountsCard />
 
       <SubscriptionAudit rec={rec} />
 
@@ -163,6 +160,77 @@ function EmergencyFundCard({ ov }: { ov: Overview }) {
           </p>
         </>
       )}
+    </Card>
+  );
+}
+
+const LIQUID_TYPES = new Set(["checking", "savings", "cash"]);
+
+/**
+ * Auto-identifies which loaded accounts count as savings: liquid accounts
+ * (checking, savings, cash) feed the emergency-fund math; credit, loan, and
+ * investment accounts are shown but excluded.
+ */
+function SavingsAccountsCard() {
+  const { data: accounts } = useApi<Account[]>("/api/accounts");
+  const rows = (accounts ?? []).filter((a) => !a.archived);
+  const liquid = rows.filter((a) => LIQUID_TYPES.has(a.type));
+  const other = rows.filter((a) => !LIQUID_TYPES.has(a.type));
+  const liquidTotal = liquid.reduce((s, a) => s + a.balance_cents, 0);
+
+  return (
+    <Card
+      title="Where your savings live"
+      action={liquid.length > 0 ? <span className="tnum text-xs text-ink3">{money(liquidTotal)} liquid</span> : undefined}
+    >
+      {rows.length === 0 ? (
+        <Empty
+          icon="wallet"
+          title="No accounts loaded yet"
+          sub="Sync SimpleFIN or add accounts in Settings — they're classified automatically (savings, checking, credit, loan…) from their names."
+        />
+      ) : (
+        <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
+          <div>
+            <div className="smallcaps mb-1.5 text-[11px] font-medium text-good">Counted as savings</div>
+            {liquid.length === 0 ? (
+              <p className="text-xs text-ink3">No liquid accounts — check account types in Settings.</p>
+            ) : (
+              liquid.map((a) => (
+                <div key={a.id} className="flex items-center justify-between border-b border-line py-1.5 text-sm last:border-0">
+                  <span className="min-w-0 truncate text-ink">
+                    {a.name}
+                    <span className="ml-1.5 text-xs text-ink3">{a.type}</span>
+                  </span>
+                  <span className="tnum shrink-0 pl-3 text-ink2">{money(a.balance_cents)}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div>
+            <div className="smallcaps mb-1.5 text-[11px] font-medium text-ink3">Not counted (debt & invested)</div>
+            {other.length === 0 ? (
+              <p className="text-xs text-ink3">None.</p>
+            ) : (
+              other.map((a) => (
+                <div key={a.id} className="flex items-center justify-between border-b border-line py-1.5 text-sm last:border-0">
+                  <span className="min-w-0 truncate text-ink">
+                    {a.name}
+                    <span className="ml-1.5 text-xs text-ink3">{a.type}</span>
+                  </span>
+                  <span className={`tnum shrink-0 pl-3 ${a.balance_cents < 0 ? "text-bad" : "text-ink2"}`}>
+                    {money(a.balance_cents)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+      <p className="mt-3 border-t border-line pt-2 text-[11px] text-ink3">
+        Types are auto-detected from account names on sync — fix any misclassification in Settings → Accounts
+        (or hit “Auto-detect types” there after a rename).
+      </p>
     </Card>
   );
 }

@@ -195,11 +195,26 @@ export interface Simulation {
 }
 
 export interface Settings {
+  ai_provider: "anthropic" | "ollama";
   ai_configured: boolean;
   model: string;
+  anthropic_model: string;
+  anthropic_key_set: boolean;
+  anthropic_key_source: "app" | "env" | null;
+  ollama_url: string;
+  ollama_model: string;
   simplefin_connected: boolean;
   simplefin_last_sync: string | null;
   currency: string;
+}
+
+export interface DupTxn extends Txn {
+  external_id: string | null;
+  import_hash: string | null;
+}
+
+export interface DuplicateGroups {
+  groups: DupTxn[][];
 }
 
 export interface CategorizeResult {

@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { db, getSetting } from "../db.js";
-import { config } from "../config.js";
+import { db, getSetting, setSetting, deleteSetting } from "../db.js";
 import { applyRules } from "../services/categorizer.js";
 import { isConnected, lastSync } from "../services/simplefin.js";
+import { resolveLlmConfig } from "../services/llm.js";
+import { inferAccountType } from "../util.js";
 
 export function registerCoreRoutes(app: FastifyInstance): void {
   // ----- Accounts -----
@@ -47,6 +48,25 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       id
     );
     return db.prepare("SELECT * FROM accounts WHERE id = ?").get(id);
+  });
+
+  /** Re-infer every account's type from its name (user-triggered, idempotent). */
+  app.post("/api/accounts/auto-type", async () => {
+    const accounts = db.prepare("SELECT id, name, type FROM accounts WHERE archived = 0").all() as Array<{
+      id: number;
+      name: string;
+      type: string;
+    }>;
+    const update = db.prepare("UPDATE accounts SET type = ? WHERE id = ?");
+    const changes: Array<{ id: number; name: string; from: string; to: string }> = [];
+    for (const a of accounts) {
+      const inferred = inferAccountType(a.name);
+      if (inferred !== a.type) {
+        update.run(inferred, a.id);
+        changes.push({ id: a.id, name: a.name, from: a.type, to: inferred });
+      }
+    }
+    return { changed: changes.length, changes };
   });
 
   app.delete("/api/accounts/:id", async (req, reply) => {
@@ -158,13 +178,59 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   // ----- App status / settings -----
-  app.get("/api/settings", async () => {
+  const settingsPayload = () => {
+    const llm = resolveLlmConfig();
     return {
-      ai_configured: Boolean(config.anthropicApiKey),
-      model: config.claudeModel,
+      ai_provider: llm.provider,
+      ai_configured: llm.configured,
+      model: llm.model,
+      anthropic_model: llm.anthropicModel,
+      anthropic_key_set: Boolean(llm.apiKey),
+      anthropic_key_source: llm.keySource,
+      ollama_url: llm.ollamaUrl,
+      ollama_model: llm.ollamaModel,
       simplefin_connected: isConnected(),
       simplefin_last_sync: lastSync(),
       currency: getSetting("currency") ?? "USD"
     };
+  };
+
+  app.get("/api/settings", async () => settingsPayload());
+
+  app.put("/api/settings", async (req, reply) => {
+    const b = req.body as {
+      ai_provider?: string;
+      anthropic_api_key?: string;
+      ai_model?: string;
+      ollama_url?: string;
+      ollama_model?: string;
+    };
+    if (b.ai_provider !== undefined) {
+      if (b.ai_provider !== "anthropic" && b.ai_provider !== "ollama") {
+        return reply.code(400).send({ error: "ai_provider must be 'anthropic' or 'ollama'." });
+      }
+      setSetting("ai_provider", b.ai_provider);
+    }
+    if (b.anthropic_api_key !== undefined) {
+      const key = b.anthropic_api_key.trim();
+      if (key === "") deleteSetting("anthropic_api_key");
+      else setSetting("anthropic_api_key", key);
+    }
+    if (b.ai_model !== undefined) {
+      const m = b.ai_model.trim();
+      if (m === "") deleteSetting("ai_model");
+      else setSetting("ai_model", m);
+    }
+    if (b.ollama_url !== undefined) {
+      const u = b.ollama_url.trim();
+      if (u === "") deleteSetting("ollama_url");
+      else setSetting("ollama_url", u);
+    }
+    if (b.ollama_model !== undefined) {
+      const m = b.ollama_model.trim();
+      if (m === "") deleteSetting("ollama_model");
+      else setSetting("ollama_model", m);
+    }
+    return settingsPayload();
   });
 }

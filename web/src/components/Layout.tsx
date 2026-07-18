@@ -13,13 +13,13 @@ const NAV = [
 
 function Brand() {
   return (
-    <div className="flex items-center gap-2.5 px-4 py-5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-bold text-white">
-        F
+    <div className="px-4 pb-4 pt-6 text-center">
+      <div className="font-display text-[24px] font-bold leading-none tracking-wide text-ink">
+        Fin<span className="text-accent">App</span>
       </div>
-      <div>
-        <div className="text-sm font-semibold leading-none text-ink">FinApp</div>
-        <div className="mt-0.5 text-[10px] uppercase tracking-widest text-ink3">self-hosted</div>
+      <div className="smallcaps mt-1 text-[10px] tracking-[0.28em] text-ink3">self·hosted ledger</div>
+      <div className="mt-1.5 select-none text-[13px] leading-none text-ink3/80" aria-hidden="true">
+        ❦
       </div>
     </div>
   );

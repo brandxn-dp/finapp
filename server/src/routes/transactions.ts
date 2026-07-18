@@ -15,6 +15,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       account_id?: string;
       q?: string;
       uncategorized?: string;
+      flow?: string;
       limit?: string;
       offset?: string;
     };
@@ -25,6 +26,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       where.push("substr(t.date, 1, 7) = ?");
       params.push(q.month);
     }
+    if (q.flow === "in") where.push("t.amount_cents > 0");
+    if (q.flow === "out") where.push("t.amount_cents < 0");
     if (q.category_id) {
       where.push("t.category_id = ?");
       params.push(Number(q.category_id));
@@ -62,6 +65,90 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       )
       .all(...params, limit, offset);
     return { total, rows };
+  });
+
+  /**
+   * Find likely duplicate transactions: same account, same amount, dates
+   * within 3 days, similar payee. Exact-hash duplicates are already blocked at
+   * import time — this catches CSV/SimpleFIN overlap and re-exports with
+   * slightly different payee text. Groups are for human review, not auto-delete.
+   */
+  app.get("/api/transactions/duplicates", async () => {
+    const pairs = db
+      .prepare(
+        `SELECT t1.id AS id1, t2.id AS id2,
+                t1.payee_norm AS norm1, t2.payee_norm AS norm2,
+                t1.date AS date1, t2.date AS date2,
+                t1.external_id AS ext1, t2.external_id AS ext2
+         FROM transactions t1
+         JOIN transactions t2
+           ON t1.account_id = t2.account_id
+          AND t1.amount_cents = t2.amount_cents
+          AND t1.id < t2.id
+          AND abs(julianday(t1.date) - julianday(t2.date)) <= 3
+         WHERE t1.amount_cents != 0
+         LIMIT 2000`
+      )
+      .all() as Array<{
+      id1: number;
+      id2: number;
+      norm1: string;
+      norm2: string;
+      date1: string;
+      date2: string;
+      ext1: string | null;
+      ext2: string | null;
+    }>;
+
+    const similar = (a: string, b: string) =>
+      a !== "" && b !== "" && (a === b || a.includes(b) || b.includes(a));
+
+    // Two settled bank transactions with distinct external ids are genuinely
+    // separate (e.g. daily coffee) unless they landed on the same day twice.
+    const suspicious = pairs.filter((p) => {
+      if (!similar(p.norm1, p.norm2)) return false;
+      if (p.ext1 && p.ext2 && p.ext1 !== p.ext2) return p.date1 === p.date2;
+      return true;
+    });
+
+    // Union-find to cluster overlapping pairs into groups
+    const parent = new Map<number, number>();
+    const find = (x: number): number => {
+      let r = parent.get(x) ?? x;
+      if (r !== x) {
+        r = find(r);
+        parent.set(x, r);
+      }
+      return r;
+    };
+    const union = (a: number, b: number) => parent.set(find(a), find(b));
+    for (const p of suspicious) union(p.id1, p.id2);
+
+    const groupIds = new Map<number, number[]>();
+    for (const p of suspicious) {
+      for (const id of [p.id1, p.id2]) {
+        const root = find(id);
+        const g = groupIds.get(root) ?? [];
+        if (!g.includes(id)) g.push(id);
+        groupIds.set(root, g);
+      }
+    }
+
+    const fetchTxn = db.prepare(
+      `SELECT t.id, t.account_id, t.date, t.amount_cents, t.payee, t.memo,
+              t.category_id, t.categorized_by, t.external_id, t.import_hash,
+              a.name AS account_name, c.name AS category_name, c.icon AS category_icon
+       FROM transactions t
+       JOIN accounts a ON a.id = t.account_id
+       LEFT JOIN categories c ON c.id = t.category_id
+       WHERE t.id = ?`
+    );
+    const groups = [...groupIds.values()]
+      .slice(0, 100)
+      .map((ids) => ids.sort((a, b) => a - b).map((id) => fetchTxn.get(id)))
+      .filter((g) => g.length >= 2);
+
+    return { groups };
   });
 
   app.patch("/api/transactions/:id", async (req, reply) => {

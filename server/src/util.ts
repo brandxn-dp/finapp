@@ -66,6 +66,18 @@ export function parseDate(value: string): string | null {
   return null;
 }
 
+/** Guess an account's type from its name ("Chase Sapphire Visa" -> credit). */
+export function inferAccountType(name: string): string {
+  const n = name.toLowerCase();
+  if (/(visa|mastercard|amex|american express|discover|credit|card)\b/.test(n)) return "credit";
+  if (/(mortgage|heloc|loan|auto ln|student|financing)/.test(n)) return "loan";
+  if (/(saving|sav\b|money market|mma|cd\b|certificate)/.test(n)) return "savings";
+  if (/(invest|brokerage|401k|403b|ira|roth|hsa|529)/.test(n)) return "investment";
+  if (/(cash|wallet)/.test(n)) return "cash";
+  if (/(checking|chk|debit|spending)/.test(n)) return "checking";
+  return "checking";
+}
+
 export function monthKey(date: string): string {
   return date.slice(0, 7);
 }

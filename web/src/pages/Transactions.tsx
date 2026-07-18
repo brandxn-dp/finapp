@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Papa from "papaparse";
 import { api, useApi } from "../lib/api";
-import type { Account, Category, CategorizeResult, Txn, TxnPage } from "../lib/api";
+import type { Account, Category, CategorizeResult, DuplicateGroups, Txn, TxnPage } from "../lib/api";
 import { money, monthName, shortDate } from "../lib/format";
-import { Button, Card, Empty, Icon, Input, Modal, Select, Spinner, useToast } from "../components/ui";
+import { Button, Card, Empty, Icon, Input, Modal, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 const PAGE = 100;
 
@@ -20,6 +20,7 @@ export default function Transactions() {
   const [limit, setLimit] = useState(PAGE);
   const [importing, setImporting] = useState(false);
   const [busyAi, setBusyAi] = useState(false);
+  const [view, setView] = useState<"all" | "dupes">("all");
   const { toast } = useToast();
 
   useEffect(() => {
@@ -82,20 +83,34 @@ export default function Transactions() {
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-ink">Transactions</h1>
-        <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={runAi} disabled={busyAi}>
-            {busyAi ? <Spinner /> : <Icon name="sparkle" size={14} />}
-            Auto-categorize
-          </Button>
-          <Button size="sm" onClick={() => setImporting(true)}>
-            <Icon name="upload" size={14} />
-            Import CSV
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        title="Transactions"
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={view === "dupes" ? "subtle" : "ghost"}
+              size="sm"
+              onClick={() => setView(view === "dupes" ? "all" : "dupes")}
+            >
+              <Icon name="list" size={14} />
+              {view === "dupes" ? "All transactions" : "Find duplicates"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={runAi} disabled={busyAi}>
+              {busyAi ? <Spinner /> : <Icon name="sparkle" size={14} />}
+              Auto-categorize
+            </Button>
+            <Button size="sm" onClick={() => setImporting(true)}>
+              <Icon name="upload" size={14} />
+              Import CSV
+            </Button>
+          </div>
+        }
+      />
 
+      {view === "dupes" ? (
+        <DuplicatesView categories={categories ?? []} onChanged={refetch} />
+      ) : (
+        <>
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
           <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
@@ -203,6 +218,8 @@ export default function Transactions() {
           </Button>
         </div>
       )}
+        </>
+      )}
 
       {importing && (
         <ImportWizard
@@ -216,6 +233,105 @@ export default function Transactions() {
         />
       )}
     </div>
+  );
+}
+
+// ---------------- Duplicate review ----------------
+
+function DuplicatesView({
+  categories,
+  onChanged
+}: {
+  categories: Category[];
+  onChanged: () => void;
+}) {
+  const { data, loading, refetch } = useApi<DuplicateGroups>("/api/transactions/duplicates");
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+  const { toast } = useToast();
+
+  const groups = (data?.groups ?? []).filter((_, i) => !dismissed.has(i));
+
+  const remove = async (id: number) => {
+    try {
+      await api.del(`/api/transactions/${id}`);
+      toast("Transaction deleted.", "info");
+      refetch();
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  const setCategory = async (id: number, catId: string) => {
+    try {
+      await api.patch(`/api/transactions/${id}`, { category_id: catId === "" ? null : Number(catId) });
+      refetch();
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  return (
+    <Card title="Possible duplicates">
+      <p className="mb-3 text-xs text-ink3">
+        Same account, same amount, dates within three days, similar payee — usually a CSV import overlapping a
+        bank sync. Nothing is deleted automatically: keep both, delete one, or fix a category, group by group.
+      </p>
+      {loading ? (
+        <div className="flex justify-center py-10 text-ink3"><Spinner /></div>
+      ) : groups.length === 0 ? (
+        <Empty icon="check" title="No likely duplicates found" sub="Exact duplicates are already blocked at import time." />
+      ) : (
+        <div className="space-y-4">
+          {groups.map((group, gi) => (
+            <div key={group.map((t) => t.id).join("-")} className="rounded-lg border border-line">
+              <div className="flex items-center justify-between border-b border-line bg-surface2/60 px-3 py-1.5">
+                <span className="text-xs font-medium text-ink2">
+                  {group.length} matching · {money(group[0].amount_cents)}
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => setDismissed(new Set([...dismissed, gi]))}>
+                  <Icon name="check" size={13} /> Keep all
+                </Button>
+              </div>
+              <div className="divide-y divide-line">
+                {group.map((t) => (
+                  <div key={t.id} className="px-3 py-2.5 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="tnum w-14 shrink-0 text-xs text-ink2">{shortDate(t.date)}</span>
+                      <span className="min-w-0 flex-1 truncate text-ink">{t.payee || "(no payee)"}</span>
+                      <span className="tnum shrink-0 font-medium text-ink">{money(t.amount_cents)}</span>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-[11px] text-ink3">
+                        {t.account_name} · {t.external_id ? "bank sync" : "CSV import"}
+                      </span>
+                      <Select
+                        value={t.category_id ?? ""}
+                        onChange={(e) => setCategory(t.id, e.target.value)}
+                        className="!h-7 max-w-[150px] !text-xs"
+                      >
+                        <option value="">— uncategorized —</option>
+                        {categories.map((c) => (
+                          <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                        ))}
+                      </Select>
+                      <button
+                        className="shrink-0 rounded p-1 text-ink3 hover:bg-bad/10 hover:text-bad"
+                        onClick={() => remove(t.id)}
+                        title="Delete this copy"
+                      >
+                        <Icon name="trash" size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -345,7 +461,7 @@ function ImportWizard({
               type="file"
               accept=".csv,text/csv"
               onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
-              className="block text-sm text-ink2 file:mr-3 file:rounded-lg file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:brightness-110"
+              className="block text-sm text-ink2 file:mr-3 file:rounded-lg file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-fg hover:file:brightness-110"
             />
           </label>
         </div>

@@ -1,6 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { config } from "../config.js";
 import { db } from "../db.js";
+import { llmComplete, resolveLlmConfig } from "./llm.js";
 import {
   monthlyCashflow,
   fiftyThirtyTwenty,
@@ -18,8 +17,8 @@ export const DISCLAIMER =
  * category aggregates, debt summaries, and recurring-payment patterns.
  */
 export async function generateInsights(): Promise<{ markdown: string; disclaimer: string }> {
-  if (!config.anthropicApiKey) {
-    throw new Error("No Anthropic API key configured. Add ANTHROPIC_API_KEY in Settings/environment.");
+  if (!resolveLlmConfig().configured) {
+    throw new Error("AI is not configured — add an Anthropic API key or an Ollama model in Settings.");
   }
 
   const cashflow = monthlyCashflow(6);
@@ -57,10 +56,8 @@ export async function generateInsights(): Promise<{ markdown: string; disclaimer
       : "DEBTS: none tracked"
   ].join("\n");
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const response = await client.messages.create({
-    model: config.claudeModel,
-    max_tokens: 4000,
+  const markdown = await llmComplete({
+    maxTokens: 4000,
     system:
       "You are the insights writer inside a self-hosted personal budgeting app. " +
       "You receive aggregated statistics about the user's finances and write a short, friendly monthly check-in in Markdown. " +
@@ -68,12 +65,7 @@ export async function generateInsights(): Promise<{ markdown: string; disclaimer
       "This is educational information, not professional financial advice — do not present it as personalized advice from a licensed advisor, and do not recommend specific financial products, investments, or institutions. " +
       "Structure: ## What's going well, ## Worth a look, ## Methods that fit your numbers. " +
       "Keep it under 400 words, concrete, and warm. Refer to the reader as 'you'.",
-    messages: [{ role: "user", content: summary }]
+    user: summary
   });
-
-  if (response.stop_reason === "refusal") {
-    throw new Error("The model declined to generate insights for this data.");
-  }
-  const markdown = response.content.find((b) => b.type === "text")?.text ?? "";
   return { markdown, disclaimer: DISCLAIMER };
 }

@@ -13,8 +13,8 @@ export default defineConfig({
         name: "FinApp",
         short_name: "FinApp",
         description: "Self-hosted finance & budgeting",
-        theme_color: "#0f1117",
-        background_color: "#0f1117",
+        theme_color: "#171310",
+        background_color: "#171310",
         display: "standalone",
         start_url: "/",
         icons: [
@@ -24,6 +24,9 @@ export default defineConfig({
         ]
       },
       workbox: {
+        // Precache the bundled serif fonts so the installed app looks right offline
+        globPatterns: ["**/*.{js,css,html,woff2,png}"],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         // Never cache API responses beyond the session — financial data must stay fresh
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [

@@ -1,17 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api";
 import type { Account, Category, Rule, Settings as AppSettings } from "../lib/api";
 import { money } from "../lib/format";
-import { Button, Card, Icon, Input, Select, Spinner, useToast } from "../components/ui";
+import { useTheme } from "../lib/theme";
+import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 const ACCOUNT_TYPES = ["checking", "savings", "credit", "investment", "loan", "cash", "other"];
 
 export default function Settings() {
+  const { theme, toggle } = useTheme();
   return (
     <div className="space-y-5">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">Settings</h1>
-      </header>
+      <PageHeader
+        title="Settings"
+        action={
+          <Button variant="ghost" size="sm" onClick={toggle}>
+            <Icon name={theme === "dark" ? "sun" : "moon"} size={14} />
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </Button>
+        }
+      />
       <SimplefinCard />
       <AiCard />
       <AccountsCard />
@@ -116,31 +124,169 @@ function SimplefinCard() {
   );
 }
 
+const CLAUDE_MODELS = [
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — most capable (default)" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — balanced" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — budget" }
+];
+
 function AiCard() {
-  const { data: st } = useApi<AppSettings>("/api/settings");
+  const { data: st, refetch } = useApi<AppSettings>("/api/settings");
+  const { toast } = useToast();
+  const [provider, setProvider] = useState<"anthropic" | "ollama">("anthropic");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("claude-opus-4-8");
+  const [customModel, setCustomModel] = useState("");
+  const [ollamaUrl, setOllamaUrl] = useState("");
+  const [ollamaModel, setOllamaModel] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!st) return;
+    setProvider(st.ai_provider);
+    const known = CLAUDE_MODELS.some((m) => m.id === st.anthropic_model);
+    setModel(known ? st.anthropic_model : "custom");
+    setCustomModel(known ? "" : st.anthropic_model);
+    setOllamaUrl(st.ollama_url);
+    setOllamaModel(st.ollama_model);
+  }, [st]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const resolvedModel = model === "custom" ? customModel.trim() : model;
+      await api.put("/api/settings", {
+        ai_provider: provider,
+        // Empty key input means "keep what's stored" — clearing is explicit via the button
+        ...(apiKey.trim() ? { anthropic_api_key: apiKey.trim() } : {}),
+        ai_model: resolvedModel,
+        ollama_url: ollamaUrl.trim(),
+        ollama_model: ollamaModel.trim()
+      });
+      setApiKey("");
+      toast("AI settings saved.", "good");
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearKey = async () => {
+    await api.put("/api/settings", { anthropic_api_key: "" });
+    toast("Stored API key removed.", "info");
+    refetch();
+  };
+
   return (
-    <Card title="AI categorization & insights">
-      {st?.ai_configured ? (
-        <div className="flex items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-good/10 px-3 py-1 text-xs font-medium text-good">
-            <Icon name="check" size={12} /> Configured
-          </span>
-          <span className="text-xs text-ink3">model: {st.model}</span>
+    <Card
+      title="AI categorization & insights"
+      action={
+        st ? (
+          st.ai_configured ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-good/10 px-3 py-1 text-xs font-medium text-good">
+              <Icon name="check" size={12} /> {st.ai_provider === "ollama" ? `Ollama · ${st.model}` : st.model}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/10 px-3 py-1 text-xs font-medium text-warn">
+              <Icon name="alert" size={12} /> Not configured
+            </span>
+          )
+        ) : undefined
+      }
+    >
+      <div className="space-y-3">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Provider</span>
+          <Select value={provider} onChange={(e) => setProvider(e.target.value as "anthropic" | "ollama")}>
+            <option value="anthropic">Anthropic Claude (cloud API)</option>
+            <option value="ollama">Ollama (local model on your server)</option>
+          </Select>
+        </label>
+
+        {provider === "anthropic" ? (
+          <>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="block min-w-64 flex-1">
+                <span className="mb-1 block text-xs font-medium text-ink2">
+                  API key{" "}
+                  {st?.anthropic_key_set && (
+                    <span className="text-good">
+                      · configured{st.anthropic_key_source === "env" ? " via environment variable" : ""}
+                    </span>
+                  )}
+                </span>
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={st?.anthropic_key_set ? "•••••••• (leave blank to keep)" : "sk-ant-…"}
+                  className="w-full"
+                  autoComplete="off"
+                />
+              </label>
+              {st?.anthropic_key_source === "app" && (
+                <Button variant="ghost" size="sm" onClick={clearKey}>Remove stored key</Button>
+              )}
+            </div>
+            <p className="text-[11px] text-ink3">
+              Get a key at{" "}
+              <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-accent underline">
+                console.anthropic.com
+              </a>
+              . Stored only in your SQLite file on your server. Merchants are classified once and remembered, so a
+              year of statements costs pennies.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-ink2">Model</span>
+                <Select value={model} onChange={(e) => setModel(e.target.value)}>
+                  {CLAUDE_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                  <option value="custom">Custom model id…</option>
+                </Select>
+              </label>
+              {model === "custom" && (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-ink2">Custom model id</span>
+                  <Input value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="claude-…" className="w-56" />
+                </label>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2">
+              <label className="block min-w-64 flex-1">
+                <span className="mb-1 block text-xs font-medium text-ink2">Ollama URL</span>
+                <Input
+                  value={ollamaUrl}
+                  onChange={(e) => setOllamaUrl(e.target.value)}
+                  placeholder="http://192.168.1.10:11434"
+                  className="w-full"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-ink2">Model</span>
+                <Input value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder="e.g. llama3.1:8b" className="w-44" />
+              </label>
+            </div>
+            <p className="text-[11px] text-ink3">
+              Runs fully local — nothing leaves your network. Use your server's LAN address, not{" "}
+              <code className="rounded bg-surface2 px-1 py-0.5">localhost</code> (FinApp runs inside a container).
+              Small local models are noticeably less accurate at categorization than Claude; expect to correct more.
+            </p>
+          </>
+        )}
+
+        <div className="flex justify-end border-t border-line pt-3">
+          <Button onClick={save} disabled={busy}>
+            {busy ? <Spinner /> : <Icon name="check" size={14} />} Save AI settings
+          </Button>
         </div>
-      ) : (
-        <p className="text-sm text-ink2">
-          Set the <code className="rounded bg-surface2 px-1.5 py-0.5 text-xs">ANTHROPIC_API_KEY</code> environment
-          variable on the container (get a key at{" "}
-          <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-accent underline">
-            console.anthropic.com
-          </a>
-          ) to enable AI categorization and check-ins. Each merchant is classified once and remembered, so a whole
-          year of statements costs pennies. Optionally set{" "}
-          <code className="rounded bg-surface2 px-1.5 py-0.5 text-xs">CLAUDE_MODEL</code> (default{" "}
-          <code className="rounded bg-surface2 px-1.5 py-0.5 text-xs">claude-opus-4-8</code>;{" "}
-          <code className="rounded bg-surface2 px-1.5 py-0.5 text-xs">claude-haiku-4-5</code> is the budget option).
-        </p>
-      )}
+      </div>
     </Card>
   );
 }
@@ -173,8 +319,28 @@ function AccountsCard() {
     }
   };
 
+  const autoType = async () => {
+    const r = await api.post<{ changed: number; changes: Array<{ name: string; to: string }> }>(
+      "/api/accounts/auto-type"
+    );
+    toast(
+      r.changed === 0
+        ? "All account types already look right."
+        : `Reclassified ${r.changed}: ${r.changes.map((c) => `${c.name} → ${c.to}`).join(", ")}`,
+      r.changed === 0 ? "info" : "good"
+    );
+    refetch();
+  };
+
   return (
-    <Card title="Accounts">
+    <Card
+      title="Accounts"
+      action={
+        <Button size="sm" variant="ghost" onClick={autoType} title="Guess types (savings, credit, loan…) from account names">
+          <Icon name="sparkle" size={14} /> Auto-detect types
+        </Button>
+      }
+    >
       <ul className="divide-y divide-line">
         {accounts?.map((a) => (
           <li key={a.id} className="flex flex-wrap items-center gap-3 py-2.5 first:pt-0">
@@ -265,8 +431,30 @@ function RulesCard() {
     refetch();
   };
 
+  const forceApply = async () => {
+    if (
+      !window.confirm(
+        "Force-apply all rules? Matching transactions will be recategorized even if they already have a category — including ones you set by hand. Rules always win."
+      )
+    ) {
+      return;
+    }
+    const r = await api.post<{ applied: number }>("/api/categorize/apply-rules", { force: true });
+    toast(
+      r.applied === 0 ? "No transactions needed changing." : `Force-applied rules to ${r.applied} transactions.`,
+      "good"
+    );
+  };
+
   return (
-    <Card title="Categorization rules">
+    <Card
+      title="Categorization rules"
+      action={
+        <Button size="sm" variant="ghost" onClick={forceApply} title="Re-run every rule over all transactions, overriding existing categories">
+          <Icon name="refresh" size={14} /> Force re-apply all
+        </Button>
+      }
+    >
       <p className="mb-3 text-xs text-ink3">
         Rules match a payee substring and always win over AI. The AI also learns automatically from every manual
         category change you make.

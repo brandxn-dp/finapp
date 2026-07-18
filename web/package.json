@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/cormorant-garamond": "^5.2.11",
+    "@fontsource/eb-garamond": "^5.2.7",
     "papaparse": "^5.4.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

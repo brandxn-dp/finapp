@@ -118,6 +118,52 @@ export function Icon({ name, size = 18, className = "" }: { name: string; size?:
   );
 }
 
+// ---------------- Ornament ----------------
+
+/** Art Nouveau flourish — symmetric vine curls around a leaf diamond. */
+export function Flourish({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      width="150"
+      height="14"
+      viewBox="0 0 150 14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M4 7 C 22 1.5, 40 12, 58 7 C 62 5.8, 66 5.8, 69 7" />
+      <path d="M146 7 C 128 1.5, 110 12, 92 7 C 88 5.8, 84 5.8, 81 7" />
+      <path d="M75 3.2 L 78.4 7 L 75 10.8 L 71.6 7 Z" fill="currentColor" stroke="none" />
+      <circle cx="4" cy="7" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="146" cy="7" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function PageHeader({
+  title,
+  sub,
+  action
+}: {
+  title: string;
+  sub?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <header className="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="font-display text-[27px] font-semibold leading-tight tracking-wide text-ink">{title}</h1>
+        {sub && <p className="mt-0.5 text-sm text-ink2">{sub}</p>}
+        <Flourish className="mt-1.5 text-ink3/70" />
+      </div>
+      {action && <div className="pb-1">{action}</div>}
+    </header>
+  );
+}
+
 // ---------------- Primitives ----------------
 
 export function Card({
@@ -132,14 +178,18 @@ export function Card({
   className?: string;
 }) {
   return (
-    <section className={`rounded-xl border border-line bg-surface shadow-[0_1px_2px_rgba(0,0,0,0.04)] ${className}`}>
+    <section
+      className={`rounded-[14px] border border-line bg-surface shadow-[0_1px_3px_rgba(60,45,20,0.07)] outline outline-1 outline-line/60 outline-offset-[-5px] ${className}`}
+    >
       {(title || action) && (
-        <header className="flex items-center justify-between gap-3 px-5 pt-4 pb-1">
-          {title && <h2 className="text-sm font-semibold tracking-wide text-ink">{title}</h2>}
+        <header className="flex items-center justify-between gap-3 px-6 pt-4.5 pb-1">
+          {title && (
+            <h2 className="font-display smallcaps text-[16px] font-semibold text-ink">{title}</h2>
+          )}
           {action}
         </header>
       )}
-      <div className="px-5 py-4">{children}</div>
+      <div className="px-6 py-4">{children}</div>
     </section>
   );
 }
@@ -148,21 +198,33 @@ export function Stat({
   label,
   value,
   sub,
-  tone = "default"
+  tone = "default",
+  onClick
 }: {
   label: string;
   value: ReactNode;
   sub?: ReactNode;
   tone?: "default" | "good" | "bad";
+  onClick?: () => void;
 }) {
   const toneCls = tone === "good" ? "text-good" : tone === "bad" ? "text-bad" : "text-ink";
-  return (
-    <div className="rounded-xl border border-line bg-surface px-5 py-4">
-      <div className="text-xs font-medium uppercase tracking-wider text-ink3">{label}</div>
-      <div className={`tnum mt-1 text-2xl font-semibold ${toneCls}`}>{value}</div>
-      {sub && <div className="mt-1 text-xs text-ink2">{sub}</div>}
-    </div>
+  const inner = (
+    <>
+      <div className="smallcaps text-[12px] font-medium text-ink3">{label}</div>
+      <div className={`tnum font-display mt-0.5 text-[26px] font-semibold leading-tight ${toneCls}`}>{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-ink2">{sub}</div>}
+    </>
   );
+  const frame =
+    "rounded-[14px] border border-line bg-surface px-5 py-4 outline outline-1 outline-line/60 outline-offset-[-4px]";
+  if (onClick) {
+    return (
+      <button onClick={onClick} className={`${frame} block w-full cursor-pointer text-left transition-colors hover:bg-surface2/70`} title="Click for details">
+        {inner}
+      </button>
+    );
+  }
+  return <div className={frame}>{inner}</div>;
 }
 
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -175,7 +237,7 @@ export function Button({ variant = "primary", size = "md", className = "", ...re
     "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
   const sizes = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
   const variants = {
-    primary: "bg-accent text-white hover:brightness-110",
+    primary: "bg-accent text-accent-fg hover:brightness-110",
     ghost: "border border-line bg-transparent text-ink hover:bg-surface2",
     subtle: "bg-surface2 text-ink hover:brightness-95 dark:hover:brightness-125",
     danger: "border border-line text-bad hover:bg-bad/10"
@@ -222,11 +284,11 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[8vh]" onMouseDown={onClose}>
       <div
-        className={`w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-xl border border-line bg-surface shadow-xl`}
+        className={`w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-[14px] border border-line bg-surface shadow-xl`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
-          <h2 className="text-sm font-semibold text-ink">{title}</h2>
+          <h2 className="font-display smallcaps text-[16px] font-semibold text-ink">{title}</h2>
           <button className="rounded-md p-1 text-ink3 hover:bg-surface2 hover:text-ink" onClick={onClose} aria-label="Close">
             <Icon name="x" size={16} />
           </button>

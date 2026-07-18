@@ -1,36 +1,46 @@
 @import "tailwindcss";
+@import "@fontsource/eb-garamond/400.css";
+@import "@fontsource/eb-garamond/500.css";
+@import "@fontsource/eb-garamond/600.css";
+@import "@fontsource/eb-garamond/400-italic.css";
+@import "@fontsource/cormorant-garamond/600.css";
+@import "@fontsource/cormorant-garamond/700.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ——— Light Academia: warm parchment, sepia ink, olive-gold accents ——— */
 :root {
-  --bg: #f9f9f7;
-  --surface: #fcfcfb;
-  --surface-2: #f0efec;
-  --line: rgba(11, 11, 11, 0.1);
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --ink-3: #898781;
-  --grid: #e1e0d9;
-  --accent: #2a78d6;
-  --accent-soft: #cde2fb;
-  --good: #006300;
-  --bad: #d03b3b;
-  --warn: #b97b00;
+  --bg: #f2ecdd;
+  --surface: #faf5e9;
+  --surface-2: #eae2cd;
+  --line: rgba(72, 56, 28, 0.16);
+  --ink: #2c2317;
+  --ink-2: #5c5142;
+  --ink-3: #8b7f6a;
+  --grid: #e2d9c3;
+  --accent: #6c5f23;
+  --accent-fg: #fdfaf1;
+  --accent-soft: #e6dcb8;
+  --good: #40611c;
+  --bad: #a13a2c;
+  --warn: #8a6d1c;
 }
+/* ——— Dark: candlelit study — umber, cream ink, aged gold ——— */
 .dark {
-  --bg: #0d0d0d;
-  --surface: #1a1a19;
-  --surface-2: #242423;
-  --line: rgba(255, 255, 255, 0.1);
-  --ink: #ffffff;
-  --ink-2: #c3c2b7;
-  --ink-3: #898781;
-  --grid: #2c2c2a;
-  --accent: #3987e5;
-  --accent-soft: #104281;
-  --good: #0ca30c;
-  --bad: #e66767;
-  --warn: #c98500;
+  --bg: #171310;
+  --surface: #221d17;
+  --surface-2: #2d2720;
+  --line: rgba(233, 221, 199, 0.13);
+  --ink: #f0e8d8;
+  --ink-2: #c9bda5;
+  --ink-3: #94886f;
+  --grid: #383023;
+  --accent: #cdb45e;
+  --accent-fg: #241d0d;
+  --accent-soft: #4a3f1c;
+  --good: #94c25e;
+  --bad: #d97e63;
+  --warn: #cfa543;
 }
 
 @theme inline {
@@ -43,11 +53,18 @@
   --color-ink3: var(--ink-3);
   --color-grid: var(--grid);
   --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
   --color-good: var(--good);
   --color-bad: var(--bad);
   --color-warn: var(--warn);
-  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "EB Garamond", Georgia, "Times New Roman", serif;
+  --font-display: "Cormorant Garamond", Georgia, serif;
+}
+
+html {
+  /* EB Garamond runs small — a slightly larger root keeps body text readable */
+  font-size: 17px;
 }
 
 html,
@@ -63,8 +80,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Lining tabular figures for anything numeric that must align */
 .tnum {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-feature-settings: "lnum", "tnum";
+}
+
+.smallcaps {
+  font-variant: small-caps;
+  letter-spacing: 0.09em;
 }
 
 /* Recessive scrollbars that fit both themes */

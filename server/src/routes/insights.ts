@@ -8,7 +8,7 @@ import {
   fiftyThirtyTwenty,
   emergencyFund
 } from "../services/insights.js";
-import { runCategorization } from "../services/categorizer.js";
+import { applyRules, runCategorization } from "../services/categorizer.js";
 import { generateInsights, DISCLAIMER } from "../services/advisor.js";
 
 export function registerInsightRoutes(app: FastifyInstance): void {
@@ -82,5 +82,12 @@ export function registerInsightRoutes(app: FastifyInstance): void {
   app.post("/api/categorize/run", async (req) => {
     const b = (req.body ?? {}) as { use_ai?: boolean };
     return runCategorization(b.use_ai !== false);
+  });
+
+  /** Re-apply rules; force=true overrides existing categories (rules always win). */
+  app.post("/api/categorize/apply-rules", async (req) => {
+    const b = (req.body ?? {}) as { force?: boolean };
+    const applied = applyRules(b.force === true);
+    return { applied, force: b.force === true };
   });
 }

@@ -1,28 +1,35 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
-import type { BudgetRow, BudgetSuggestion, CategorySpend } from "../lib/api";
+import type { BudgetRow, BudgetSuggestion, Category, CategorySpend } from "../lib/api";
 import { currentMonth, money, monthNameLong } from "../lib/format";
 import { useChartColors } from "../lib/theme";
-import { Button, Card, Empty, Icon, Input, Spinner, useToast } from "../components/ui";
+import { Button, Card, Empty, Icon, Input, Modal, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 export default function Budget() {
   const month = currentMonth();
   const { data: budgets, refetch: refetchBudgets } = useApi<BudgetRow[]>("/api/budgets");
+  const { data: categories, refetch: refetchCategories } = useApi<Category[]>("/api/categories");
   const { data: spend } = useApi<{ month: string; spending: CategorySpend[] }>(
     `/api/insights/spending?month=${month}`
   );
   const { data: sugg, refetch: refetchSugg, loading: loadingSugg } = useApi<{ suggestions: BudgetSuggestion[] }>(
     "/api/insights/budget-suggestions"
   );
+  const [modal, setModal] = useState<"add" | BudgetRow | null>(null);
   const { toast } = useToast();
 
   const spentBy = new Map((spend?.spending ?? []).map((s) => [s.category_id, s.total_cents]));
 
+  const refreshAll = () => {
+    refetchBudgets();
+    refetchCategories();
+    refetchSugg();
+  };
+
   const save = async (categoryId: number, monthlyCents: number) => {
     try {
       await api.put("/api/budgets", { items: [{ category_id: categoryId, monthly_cents: monthlyCents }] });
-      refetchBudgets();
-      refetchSugg();
+      refreshAll();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), "bad");
     }
@@ -37,8 +44,7 @@ export default function Budget() {
     try {
       await api.put("/api/budgets", { items });
       toast(`Applied ${items.length} suggested budgets.`, "good");
-      refetchBudgets();
-      refetchSugg();
+      refreshAll();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), "bad");
     }
@@ -50,17 +56,22 @@ export default function Budget() {
 
   return (
     <div className="space-y-5">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">Budget</h1>
-        <p className="mt-0.5 text-sm text-ink2">{monthNameLong(month)} — budgets learned from your actual spending patterns</p>
-      </header>
+      <PageHeader
+        title="Budget"
+        sub={`${monthNameLong(month)} — budgets learned from your actual spending patterns`}
+        action={
+          <Button size="sm" onClick={() => setModal("add")}>
+            <Icon name="plus" size={14} /> Add budget item
+          </Button>
+        }
+      />
 
       <Card title="Monthly budgets">
         {!budgets || budgets.length === 0 ? (
           <Empty
             icon="target"
             title="No budgets set yet"
-            sub="Accept the suggestions below — they're computed from your last six months of spending."
+            sub="Accept the suggestions below, or add items by hand with the button above."
           />
         ) : (
           <ul className="space-y-4">
@@ -70,6 +81,7 @@ export default function Budget() {
                 row={b}
                 spent={spentBy.get(b.category_id) ?? 0}
                 onSave={save}
+                onEdit={() => setModal(b)}
               />
             ))}
           </ul>
@@ -79,11 +91,23 @@ export default function Budget() {
       <Card
         title="Suggested budgets"
         action={
-          pending.length > 1 ? (
-            <Button size="sm" variant="ghost" onClick={applyAll}>
-              <Icon name="check" size={14} /> Apply all
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                refetchSugg();
+                toast("Recalculated from your latest transactions.", "info");
+              }}
+            >
+              <Icon name="refresh" size={14} /> Recalculate
             </Button>
-          ) : undefined
+            {pending.length > 1 && (
+              <Button size="sm" variant="ghost" onClick={applyAll}>
+                <Icon name="check" size={14} /> Apply all
+              </Button>
+            )}
+          </div>
         }
       >
         {loadingSugg ? (
@@ -92,7 +116,7 @@ export default function Budget() {
           <Empty
             icon="check"
             title="You're all caught up"
-            sub="Suggestions appear once there are at least two months of categorized history in a category."
+            sub="Suggestions appear once there are at least two months of categorized history in a category. They're computed live from your transactions — Recalculate picks up anything new."
           />
         ) : (
           <ul className="divide-y divide-line">
@@ -114,6 +138,19 @@ export default function Budget() {
           </ul>
         )}
       </Card>
+
+      {modal && (
+        <BudgetItemModal
+          existing={modal === "add" ? null : modal}
+          categories={categories ?? []}
+          budgets={budgets ?? []}
+          onClose={() => setModal(null)}
+          onSaved={() => {
+            setModal(null);
+            refreshAll();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -121,15 +158,15 @@ export default function Budget() {
 function BudgetLine({
   row,
   spent,
-  onSave
+  onSave,
+  onEdit
 }: {
   row: BudgetRow;
   spent: number;
   onSave: (categoryId: number, monthlyCents: number) => void;
+  onEdit: () => void;
 }) {
   const c = useChartColors();
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(String(Math.round(row.monthly_cents / 100)));
   const pct = Math.min(100, (spent / Math.max(1, row.monthly_cents)) * 100);
   const over = spent > row.monthly_cents;
 
@@ -146,33 +183,11 @@ function BudgetLine({
           )}
         </span>
         <span className="tnum shrink-0 text-ink2">
-          {money(spent)} <span className="text-ink3">of</span>{" "}
-          {editing ? (
-            <span className="inline-flex items-center gap-1">
-              $
-              <Input
-                autoFocus
-                value={value}
-                onChange={(e) => setValue(e.target.value.replace(/[^0-9]/g, ""))}
-                onBlur={() => {
-                  setEditing(false);
-                  const cents = Number(value) * 100;
-                  if (Number.isFinite(cents) && cents !== row.monthly_cents) onSave(row.category_id, cents);
-                }}
-                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                className="!h-6 w-20 !px-1.5 !text-xs"
-              />
-            </span>
-          ) : (
-            <button className="underline decoration-dotted underline-offset-2 hover:text-ink" onClick={() => setEditing(true)}>
-              {money(row.monthly_cents)}
-            </button>
-          )}
-          <button
-            className="ml-2 text-ink3 hover:text-bad"
-            title="Remove budget"
-            onClick={() => onSave(row.category_id, 0)}
-          >
+          {money(spent)} <span className="text-ink3">of</span> {money(row.monthly_cents)}
+          <button className="ml-2 text-ink3 hover:text-ink" title="Edit name, emoji, or amount" onClick={onEdit}>
+            <Icon name="sliders" size={12} />
+          </button>
+          <button className="ml-1.5 text-ink3 hover:text-bad" title="Remove budget" onClick={() => onSave(row.category_id, 0)}>
             <Icon name="x" size={12} />
           </button>
         </span>
@@ -184,5 +199,143 @@ function BudgetLine({
         />
       </div>
     </li>
+  );
+}
+
+/**
+ * Add or edit a budget item. A budget item is a category + monthly amount, so
+ * adding one can also mint a brand-new category with its own name and emoji.
+ */
+function BudgetItemModal({
+  existing,
+  categories,
+  budgets,
+  onClose,
+  onSaved
+}: {
+  existing: BudgetRow | null;
+  categories: Category[];
+  budgets: BudgetRow[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const budgeted = new Set(budgets.map((b) => b.category_id));
+  const available = categories.filter((c) => c.kind === "expense" && !budgeted.has(c.id));
+
+  const [mode, setMode] = useState<"existing" | "new">(existing ? "existing" : available.length > 0 ? "existing" : "new");
+  const [categoryId, setCategoryId] = useState<string>(existing ? String(existing.category_id) : available[0] ? String(available[0].id) : "");
+  const [name, setName] = useState(existing?.name ?? "");
+  const [icon, setIcon] = useState(existing?.icon ?? "🏷️");
+  const [grp, setGrp] = useState(existing?.grp ?? "lifestyle");
+  const [amount, setAmount] = useState(existing ? String(Math.round(existing.monthly_cents / 100)) : "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    const cents = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) {
+      toast("Enter a monthly amount above zero.", "bad");
+      return;
+    }
+    setBusy(true);
+    try {
+      let catId: number;
+      if (existing) {
+        catId = existing.category_id;
+        // Name/emoji edits apply to the underlying category
+        if (name.trim() && (name.trim() !== existing.name || icon !== existing.icon)) {
+          await api.patch(`/api/categories/${catId}`, { name: name.trim(), icon });
+        }
+      } else if (mode === "new") {
+        if (!name.trim()) {
+          toast("Give the new budget item a name.", "bad");
+          setBusy(false);
+          return;
+        }
+        const created = await api.post<Category>("/api/categories", {
+          name: name.trim(),
+          icon,
+          grp,
+          kind: "expense"
+        });
+        catId = created.id;
+      } else {
+        catId = Number(categoryId);
+        if (!catId) {
+          toast("Pick a category.", "bad");
+          setBusy(false);
+          return;
+        }
+      }
+      await api.put("/api/budgets", { items: [{ category_id: catId, monthly_cents: cents }] });
+      toast(existing ? "Budget updated." : "Budget item added.", "good");
+      onSaved();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={existing ? "Edit budget item" : "Add budget item"} onClose={onClose}>
+      <div className="space-y-3">
+        {!existing && (
+          <div className="flex gap-2">
+            <Button variant={mode === "existing" ? "subtle" : "ghost"} size="sm" onClick={() => setMode("existing")} disabled={available.length === 0}>
+              Existing category
+            </Button>
+            <Button variant={mode === "new" ? "subtle" : "ghost"} size="sm" onClick={() => setMode("new")}>
+              New category
+            </Button>
+          </div>
+        )}
+
+        {!existing && mode === "existing" ? (
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-ink2">Category</span>
+            <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="w-full">
+              {available.map((c) => (
+                <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+              ))}
+            </Select>
+          </label>
+        ) : (
+          <div className="flex gap-3">
+            <label className="block w-20">
+              <span className="mb-1 block text-xs font-medium text-ink2">Emoji</span>
+              <Input value={icon} onChange={(e) => setIcon(e.target.value)} className="w-full text-center" maxLength={4} />
+            </label>
+            <label className="block flex-1">
+              <span className="mb-1 block text-xs font-medium text-ink2">Name</span>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Coffee runs" className="w-full" />
+            </label>
+            {!existing && (
+              <label className="block w-32">
+                <span className="mb-1 block text-xs font-medium text-ink2">Group</span>
+                <Select value={grp} onChange={(e) => setGrp(e.target.value)} className="w-full">
+                  <option value="essential">Needs</option>
+                  <option value="lifestyle">Wants</option>
+                  <option value="savings">Savings</option>
+                  <option value="other">Other</option>
+                </Select>
+              </label>
+            )}
+          </div>
+        )}
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Monthly amount ($)</span>
+          <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" className="w-40" />
+        </label>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={busy}>
+            {busy ? <Spinner /> : <Icon name="check" size={14} />} Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

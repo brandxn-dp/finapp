@@ -10,17 +10,31 @@ import {
   YAxis
 } from "recharts";
 import { api, useApi } from "../lib/api";
-import type { Overview, RecurringItem } from "../lib/api";
+import type { Account, Overview, RecurringItem, TxnPage } from "../lib/api";
 import { money, moneyCompact, monthName, monthNameLong, shortDate } from "../lib/format";
 import { useChartColors } from "../lib/theme";
-import { Button, Card, Empty, Icon, Markdown, Spinner, Stat, useToast } from "../components/ui";
+import {
+  Button,
+  Card,
+  Empty,
+  Icon,
+  Markdown,
+  Modal,
+  PageHeader,
+  Spinner,
+  Stat,
+  useToast
+} from "../components/ui";
 import { ChartTooltip, LegendRow } from "../components/charts";
+
+type Popup = "networth" | "income" | "spending" | "recurring" | null;
 
 export default function Dashboard() {
   const { data: ov, loading } = useApi<Overview>("/api/insights/overview");
   const { data: rec } = useApi<{ items: RecurringItem[]; monthly_total_cents: number }>(
     "/api/insights/recurring"
   );
+  const [popup, setPopup] = useState<Popup>(null);
 
   if (loading || !ov) {
     return (
@@ -35,21 +49,21 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-ink">Dashboard</h1>
-          <p className="mt-0.5 text-sm text-ink2">{monthNameLong(ov.month)}</p>
-        </div>
-        {ov.uncategorized > 0 && (
-          <Link
-            to="/transactions?uncategorized=1"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-surface2"
-          >
-            <Icon name="alert" size={14} className="text-warn" />
-            {ov.uncategorized} uncategorized
-          </Link>
-        )}
-      </header>
+      <PageHeader
+        title="Dashboard"
+        sub={monthNameLong(ov.month)}
+        action={
+          ov.uncategorized > 0 ? (
+            <Link
+              to="/transactions?uncategorized=1"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-surface2"
+            >
+              <Icon name="alert" size={14} className="text-warn" />
+              {ov.uncategorized} uncategorized
+            </Link>
+          ) : undefined
+        }
+      />
 
       {!hasData ? (
         <Card>
@@ -74,17 +88,30 @@ export default function Dashboard() {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Net worth" value={money(ov.net_worth_cents)} sub="across all accounts" />
+            <Stat
+              label="Net worth"
+              value={money(ov.net_worth_cents)}
+              sub="across all accounts — click to see why"
+              onClick={() => setPopup("networth")}
+            />
             <Stat
               label="Income this month"
               value={money(thisMonth?.income_cents ?? 0)}
               tone="good"
+              sub="click for sources"
+              onClick={() => setPopup("income")}
             />
-            <Stat label="Spending this month" value={money(thisMonth?.expense_cents ?? 0)} />
+            <Stat
+              label="Spending this month"
+              value={money(thisMonth?.expense_cents ?? 0)}
+              sub="click for where it went"
+              onClick={() => setPopup("spending")}
+            />
             <Stat
               label="Recurring / month"
               value={money(rec?.monthly_total_cents ?? 0)}
-              sub={`${rec?.items.length ?? 0} detected`}
+              sub={`${rec?.items.length ?? 0} detected — click to review`}
+              onClick={() => setPopup("recurring")}
             />
           </div>
 
@@ -99,9 +126,179 @@ export default function Dashboard() {
           </div>
         </>
       )}
+
+      {popup === "networth" && <NetWorthModal total={ov.net_worth_cents} onClose={() => setPopup(null)} />}
+      {popup === "income" && <FlowModal flow="in" month={ov.month} onClose={() => setPopup(null)} />}
+      {popup === "spending" && <SpendingModal ov={ov} onClose={() => setPopup(null)} />}
+      {popup === "recurring" && <RecurringModal items={rec?.items ?? []} onClose={() => setPopup(null)} />}
     </div>
   );
 }
+
+// ---------------- Stat detail popups ----------------
+
+const TYPE_LABELS: Record<string, string> = {
+  checking: "Checking",
+  savings: "Savings",
+  credit: "Credit card",
+  investment: "Investment",
+  loan: "Loan",
+  cash: "Cash",
+  other: "Other"
+};
+
+function NetWorthModal({ total, onClose }: { total: number; onClose: () => void }) {
+  const { data: accounts } = useApi<Account[]>("/api/accounts");
+  const rows = (accounts ?? []).filter((a) => !a.archived);
+  const positive = rows.filter((a) => a.balance_cents >= 0);
+  const negative = rows.filter((a) => a.balance_cents < 0);
+  return (
+    <Modal title="Why your net worth is what it is" onClose={onClose}>
+      {!accounts ? (
+        <div className="flex justify-center py-8 text-ink3"><Spinner /></div>
+      ) : (
+        <div className="space-y-1">
+          <p className="mb-2 text-xs text-ink3">
+            Net worth is simply every account balance added together — assets minus what you owe.
+          </p>
+          {[...positive, ...negative].map((a) => (
+            <div key={a.id} className="flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
+              <span className="min-w-0 truncate text-ink">
+                {a.name}
+                <span className="ml-2 text-xs text-ink3">{TYPE_LABELS[a.type] ?? a.type}</span>
+              </span>
+              <span className={`tnum shrink-0 pl-3 font-medium ${a.balance_cents < 0 ? "text-bad" : "text-ink"}`}>
+                {money(a.balance_cents)}
+              </span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between pt-2 text-sm font-semibold">
+            <span className="text-ink">Net worth</span>
+            <span className="tnum font-display text-lg text-ink">{money(total)}</span>
+          </div>
+          <p className="pt-1 text-[11px] text-ink3">
+            Balances come from SimpleFIN syncs or the manual balances you set in Settings → Accounts.
+          </p>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** Lists this month's income (flow=in) transactions. */
+function FlowModal({ flow, month, onClose }: { flow: "in"; month: string; onClose: () => void }) {
+  const { data } = useApi<TxnPage>(`/api/transactions?month=${month}&flow=${flow}&limit=300`);
+  const rows = data?.rows ?? [];
+  const total = rows.reduce((s, t) => s + t.amount_cents, 0);
+  return (
+    <Modal title="Where the money came from" onClose={onClose}>
+      {!data ? (
+        <div className="flex justify-center py-8 text-ink3"><Spinner /></div>
+      ) : rows.length === 0 ? (
+        <Empty icon="wallet" title="No income recorded this month yet" />
+      ) : (
+        <div className="max-h-[55vh] space-y-1 overflow-y-auto">
+          {rows.map((t) => (
+            <div key={t.id} className="flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
+              <span className="min-w-0">
+                <span className="block truncate text-ink">{t.payee || "(no payee)"}</span>
+                <span className="text-xs text-ink3">
+                  {shortDate(t.date)} · {t.account_name}
+                  {t.category_name ? ` · ${t.category_icon} ${t.category_name}` : ""}
+                </span>
+              </span>
+              <span className="tnum shrink-0 pl-3 font-medium text-good">+{money(t.amount_cents)}</span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between pt-2 text-sm font-semibold">
+            <span className="text-ink">Total income</span>
+            <span className="tnum font-display text-lg text-good">{money(total)}</span>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** Category breakdown + individual spending transactions for the month. */
+function SpendingModal({ ov, onClose }: { ov: Overview; onClose: () => void }) {
+  const { data } = useApi<TxnPage>(`/api/transactions?month=${ov.month}&flow=out&limit=300`);
+  const rows = [...(data?.rows ?? [])].sort((a, b) => a.amount_cents - b.amount_cents);
+  return (
+    <Modal title="Where the money went" onClose={onClose}>
+      <div className="max-h-[60vh] overflow-y-auto">
+        {ov.spending.length > 0 && (
+          <>
+            <div className="smallcaps mb-1.5 text-[11px] font-medium text-ink3">By category</div>
+            <div className="mb-3 space-y-1">
+              {ov.spending.map((s) => (
+                <div key={`${s.category_id}`} className="flex items-center justify-between py-0.5 text-sm">
+                  <span className="text-ink">
+                    <span className="mr-1.5">{s.icon}</span>
+                    {s.name}
+                  </span>
+                  <span className="tnum text-ink2">{money(s.total_cents)}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="smallcaps mb-1.5 border-t border-line pt-2 text-[11px] font-medium text-ink3">
+          Largest transactions first
+        </div>
+        {!data ? (
+          <div className="flex justify-center py-8 text-ink3"><Spinner /></div>
+        ) : (
+          rows.map((t) => (
+            <div key={t.id} className="flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
+              <span className="min-w-0">
+                <span className="block truncate text-ink">{t.payee || "(no payee)"}</span>
+                <span className="text-xs text-ink3">
+                  {shortDate(t.date)}
+                  {t.category_name ? ` · ${t.category_icon} ${t.category_name}` : " · uncategorized"}
+                </span>
+              </span>
+              <span className="tnum shrink-0 pl-3 font-medium text-ink">{money(t.amount_cents)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function RecurringModal({ items, onClose }: { items: RecurringItem[]; onClose: () => void }) {
+  return (
+    <Modal title="What counts as recurring" onClose={onClose}>
+      <p className="mb-2 text-xs text-ink3">
+        A merchant is deemed recurring when it charges you at a steady rhythm (weekly to yearly) with a
+        consistent amount, at least three times. Detected from your history — nothing is marked by hand.
+      </p>
+      {items.length === 0 ? (
+        <Empty icon="refresh" title="Nothing recurring detected yet" />
+      ) : (
+        <div className="max-h-[55vh] overflow-y-auto">
+          {items.map((r) => (
+            <div key={r.payee_norm} className="flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
+              <span className="min-w-0">
+                <span className="block truncate text-ink">
+                  <span className="mr-1.5">{r.icon ?? "🔁"}</span>
+                  {r.payee}
+                </span>
+                <span className="text-xs text-ink3">
+                  {r.cadence} · seen {r.occurrences}× · last {shortDate(r.last_date)} · next ~{shortDate(r.next_date)}
+                </span>
+              </span>
+              <span className="tnum shrink-0 pl-3 font-medium text-ink">{money(r.avg_cents)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ---------------- Cards ----------------
 
 function CashflowCard({ ov }: { ov: Overview }) {
   const c = useChartColors();
@@ -114,13 +311,13 @@ function CashflowCard({ ov }: { ov: Overview }) {
             <XAxis
               dataKey="month"
               tickFormatter={monthName}
-              tick={{ fill: c.muted, fontSize: 11 }}
+              tick={{ fill: c.muted, fontSize: 12 }}
               axisLine={{ stroke: c.axis }}
               tickLine={false}
             />
             <YAxis
               tickFormatter={(v: number) => moneyCompact(v)}
-              tick={{ fill: c.muted, fontSize: 11 }}
+              tick={{ fill: c.muted, fontSize: 12 }}
               axisLine={false}
               tickLine={false}
               width={44}
@@ -210,7 +407,7 @@ function AiCheckin() {
         <Empty
           icon="sparkle"
           title="Your monthly money check-in"
-          sub="Claude reads your aggregated numbers (never raw transactions) and writes a short review with budgeting methods that fit them."
+          sub="Your AI provider reads aggregated numbers (never raw transactions) and writes a short review with budgeting methods that fit them. Configure the provider in Settings."
         />
       )}
     </Card>

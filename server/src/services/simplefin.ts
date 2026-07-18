@@ -1,5 +1,5 @@
 import { db, getSetting, setSetting, deleteSetting } from "../db.js";
-import { normalizePayee } from "../util.js";
+import { inferAccountType, normalizePayee } from "../util.js";
 import { applyRules, applyMerchantCache } from "./categorizer.js";
 
 const ACCESS_URL_KEY = "simplefin_access_url";
@@ -88,9 +88,11 @@ export async function sync(): Promise<SyncResult> {
   if (!res.ok) throw new Error(`SimpleFIN sync failed (HTTP ${res.status}).`);
   const data = (await res.json()) as { errors?: string[]; accounts?: SfAccount[] };
 
+  // Type is inferred from the name on first sight only — later syncs keep any
+  // type the user has corrected by hand.
   const upsertAccount = db.prepare(
     `INSERT INTO accounts (name, type, currency, balance_cents, simplefin_id)
-     VALUES (?, 'checking', ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(simplefin_id) DO UPDATE SET balance_cents = excluded.balance_cents`
   );
   const getAccountId = db.prepare("SELECT id FROM accounts WHERE simplefin_id = ?");
@@ -106,8 +108,9 @@ export async function sync(): Promise<SyncResult> {
   const run = db.transaction(() => {
     for (const acct of accounts) {
       const orgName = acct.org?.name ? `${acct.org.name} — ` : "";
+      const fullName = `${orgName}${acct.name}`;
       const balanceCents = Math.round(Number(acct.balance) * 100) || 0;
-      upsertAccount.run(`${orgName}${acct.name}`, acct.currency || "USD", balanceCents, acct.id);
+      upsertAccount.run(fullName, inferAccountType(fullName), acct.currency || "USD", balanceCents, acct.id);
       const accountId = (getAccountId.get(acct.id) as { id: number }).id;
 
       for (const t of acct.transactions ?? []) {

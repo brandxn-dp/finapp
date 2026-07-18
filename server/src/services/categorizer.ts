@@ -1,6 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { db } from "../db.js";
-import { config } from "../config.js";
+import { llmComplete, resolveLlmConfig } from "./llm.js";
 
 interface CategoryRow {
   id: number;
@@ -43,7 +42,7 @@ export async function runCategorization(useAi: boolean): Promise<CategorizeResul
     aiUsed: false
   };
 
-  if (useAi && config.anthropicApiKey) {
+  if (useAi && resolveLlmConfig().configured) {
     try {
       const ai = await aiCategorizeNewMerchants();
       result.byAi = ai.updated;
@@ -62,22 +61,33 @@ export async function runCategorization(useAi: boolean): Promise<CategorizeResul
   return result;
 }
 
-/** Apply user rules to uncategorized transactions. Returns rows updated. */
-export function applyRules(): number {
+/**
+ * Apply user rules to transactions. Normally only uncategorized rows are
+ * touched; with `force` the rules override every existing categorization
+ * (including manual ones — rules are explicit user intent).
+ * Returns rows updated.
+ */
+export function applyRules(force = false): number {
   const rules = db
     .prepare("SELECT id, pattern, category_id FROM rules ORDER BY length(pattern) DESC")
     .all() as Array<{ id: number; pattern: string; category_id: number }>;
   if (rules.length === 0) return 0;
 
   const update = db.prepare(
-    `UPDATE transactions SET category_id = ?, categorized_by = 'rule'
-     WHERE category_id IS NULL AND (lower(payee) LIKE ? OR lower(memo) LIKE ?)`
+    force
+      ? `UPDATE transactions SET category_id = ?, categorized_by = 'rule'
+         WHERE (lower(payee) LIKE ? OR lower(memo) LIKE ?)
+           AND (category_id IS NOT ? OR categorized_by IS NOT 'rule')`
+      : `UPDATE transactions SET category_id = ?, categorized_by = 'rule'
+         WHERE category_id IS NULL AND (lower(payee) LIKE ? OR lower(memo) LIKE ?)`
   );
   let total = 0;
   const run = db.transaction(() => {
     for (const r of rules) {
       const like = `%${r.pattern.toLowerCase()}%`;
-      total += update.run(r.category_id, like, like).changes;
+      total += force
+        ? update.run(r.category_id, like, like, r.category_id).changes
+        : update.run(r.category_id, like, like).changes;
     }
   });
   run();
@@ -138,13 +148,12 @@ async function aiCategorizeNewMerchants(): Promise<{ updated: number; newMerchan
     .all() as CategoryRow[];
   const byName = new Map(categories.map((c) => [c.name.toLowerCase(), c]));
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
   let updated = 0;
   let newMerchants = 0;
 
   for (let i = 0; i < pending.length; i += BATCH_SIZE) {
     const batch = pending.slice(i, i + BATCH_SIZE);
-    const assignments = await classifyBatch(client, categories, batch);
+    const assignments = await classifyBatch(categories, batch);
 
     const upsertCache = db.prepare(
       `INSERT INTO merchant_cache (payee_norm, category_id, source, updated_at)
@@ -172,7 +181,6 @@ async function aiCategorizeNewMerchants(): Promise<{ updated: number; newMerchan
 }
 
 async function classifyBatch(
-  client: Anthropic,
   categories: CategoryRow[],
   batch: PayeeSample[]
 ): Promise<Array<{ payee_norm: string; category: string }>> {
@@ -187,7 +195,7 @@ async function classifyBatch(
     })
     .join("\n");
 
-  const schema = {
+  const schema: Record<string, unknown> = {
     type: "object",
     properties: {
       assignments: {
@@ -205,34 +213,20 @@ async function classifyBatch(
     },
     required: ["assignments"],
     additionalProperties: false
-  } as const;
+  };
 
-  const response = await client.messages.create({
-    model: config.claudeModel,
-    max_tokens: 16000,
+  const text = await llmComplete({
+    maxTokens: 16000,
+    schema,
     system:
       "You classify bank transaction merchants into personal budgeting categories. " +
       "Pick exactly one category name from the provided list for each merchant, copied verbatim. " +
       "Use the amount direction as a hint (money in is usually income; money out is spending). " +
       "Transfers between own accounts, credit card payments described as payments, and Zelle/Venmo between people go to Transfers. " +
       "If a merchant is genuinely unrecognizable, use Miscellaneous.",
-    messages: [
-      {
-        role: "user",
-        content: `Categories:\n${categoryList}\n\nMerchants to classify:\n${merchantList}\n\nReturn one assignment per merchant, using each merchant's list index.`
-      }
-    ],
-    output_config: { format: { type: "json_schema", schema } }
+    user: `Categories:\n${categoryList}\n\nMerchants to classify:\n${merchantList}\n\nReturn one assignment per merchant, using each merchant's list index.`
   });
 
-  if (response.stop_reason === "refusal") {
-    throw new Error("The model declined to process this batch.");
-  }
-  if (response.stop_reason === "max_tokens") {
-    throw new Error("Categorization response was truncated; try again (smaller batch).");
-  }
-
-  const text = response.content.find((b) => b.type === "text")?.text ?? "";
   const parsed = JSON.parse(text) as { assignments: Array<{ index: number; category: string }> };
   return parsed.assignments
     .filter((a) => Number.isInteger(a.index) && a.index >= 0 && a.index < batch.length)

@@ -54,6 +54,48 @@ export function registerDebtRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
+  /**
+   * Seed the debt planner from account data: credit/loan accounts (or any
+   * account carrying a negative balance) become debts. APR and minimum payment
+   * are estimates the user should correct from their statement.
+   */
+  app.post("/api/debts/import-accounts", async () => {
+    const accounts = db
+      .prepare(
+        `SELECT id, name, type, balance_cents FROM accounts
+         WHERE archived = 0 AND (type IN ('credit', 'loan') OR balance_cents < 0)`
+      )
+      .all() as Array<{ id: number; name: string; type: string; balance_cents: number }>;
+
+    const existing = new Set(
+      (db.prepare("SELECT lower(name) AS n FROM debts").all() as Array<{ n: string }>).map((r) => r.n)
+    );
+    const insert = db.prepare(
+      "INSERT INTO debts (name, balance_cents, apr, min_payment_cents) VALUES (?, ?, ?, ?)"
+    );
+
+    const created: string[] = [];
+    let skipped = 0;
+    for (const a of accounts) {
+      const owed = Math.abs(a.balance_cents);
+      if (owed === 0) {
+        skipped++;
+        continue;
+      }
+      if (existing.has(a.name.toLowerCase())) {
+        skipped++;
+        continue;
+      }
+      // Estimated defaults, clearly surfaced in the UI for correction
+      const apr = a.type === "loan" ? 7.5 : 21.99;
+      const minPayment =
+        a.type === "loan" ? Math.max(5000, Math.round(owed * 0.01)) : Math.max(2500, Math.round(owed * 0.02));
+      insert.run(a.name, owed, apr, minPayment);
+      created.push(a.name);
+    }
+    return { created, skipped, note: created.length > 0 ? "APR and minimum payments are estimates — edit them to match your statements." : undefined };
+  });
+
   /** Compare snowball vs avalanche for the tracked debts with an optional extra monthly payment. */
   app.post("/api/debts/simulate", async (req, reply) => {
     const b = (req.body ?? {}) as { extra_cents?: number };

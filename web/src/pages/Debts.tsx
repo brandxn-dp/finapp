@@ -12,7 +12,7 @@ import { api, useApi } from "../lib/api";
 import type { Debt, PayoffResult, Simulation } from "../lib/api";
 import { money, moneyCompact, monthName } from "../lib/format";
 import { useChartColors } from "../lib/theme";
-import { Button, Card, Empty, Icon, Input, Modal, Spinner, useToast } from "../components/ui";
+import { Button, Card, Empty, Icon, Input, Modal, PageHeader, Spinner, useToast } from "../components/ui";
 import { ChartTooltip, LegendRow } from "../components/charts";
 
 export default function Debts() {
@@ -46,26 +46,45 @@ export default function Debts() {
   const totalDebt = (debts ?? []).reduce((s, d) => s + d.balance_cents, 0);
   const interestSaved = sim ? sim.snowball.total_interest_cents - sim.avalanche.total_interest_cents : 0;
 
+  const importFromAccounts = async () => {
+    try {
+      const r = await api.post<{ created: string[]; skipped: number; note?: string }>(
+        "/api/debts/import-accounts"
+      );
+      if (r.created.length === 0) {
+        toast("No credit or loan accounts with balances to import (already imported, or none synced).", "info");
+      } else {
+        toast(`Imported ${r.created.length} debt${r.created.length > 1 ? "s" : ""}: ${r.created.join(", ")}. ${r.note ?? ""}`, "good");
+        refetch();
+      }
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
   return (
     <div className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-ink">Debt Planner</h1>
-          <p className="mt-0.5 text-sm text-ink2">
-            Compare the two most popular payoff methods against your actual debts.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setEditing("new")}>
-          <Icon name="plus" size={14} /> Add debt
-        </Button>
-      </header>
+      <PageHeader
+        title="Debt Planner"
+        sub="Compare the two most popular payoff methods against your actual debts."
+        action={
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={importFromAccounts} title="Create debts from credit-card and loan accounts">
+              <Icon name="card" size={14} /> Import from accounts
+            </Button>
+            <Button size="sm" onClick={() => setEditing("new")}>
+              <Icon name="plus" size={14} /> Add debt
+            </Button>
+          </div>
+        }
+      />
 
       {!debts || debts.length === 0 ? (
         <Card>
           <Empty
             icon="card"
             title="No debts tracked"
-            sub="Add each credit card or loan with its balance, APR, and minimum payment — the planner does the rest."
+            sub="Add each credit card or loan by hand, or use “Import from accounts” to pull in your synced credit-card and loan balances automatically (then correct the estimated APRs)."
           />
         </Card>
       ) : (

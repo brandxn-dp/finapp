@@ -1,0 +1,18 @@
+services:
+  finapp:
+    # Pull the pre-built image from GitHub Container Registry (rebuilt by CI on
+    # every push to main). To build from source instead, comment out `image:`
+    # and uncomment `build: .`.
+    image: ghcr.io/brandxn-dp/finapp:latest
+    # build: .
+    container_name: finapp
+    ports:
+      - "8484:8484"
+    volumes:
+      - ./data:/data
+    environment:
+      # Optional — enables AI categorization and check-ins
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Optional — claude-haiku-4-5 is the budget option
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
+    restart: unless-stopped

@@ -382,23 +382,42 @@ function SpendingCard({ ov }: { ov: Overview }) {
         <Empty icon="target" title="Nothing spent this month yet" />
       ) : (
         <ul className="space-y-3">
-          {rows.map((r) => (
-            <li key={`${r.category_id}-${r.name}`}>
-              <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
-                <span className="truncate text-ink">
-                  <span className="mr-1.5">{r.icon}</span>
-                  {r.name}
-                </span>
-                <span className="tnum shrink-0 text-ink2">{money(r.total_cents)}</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-surface2">
-                <div
-                  className="h-full rounded-full"
-                  style={{ width: `${(r.total_cents / max) * 100}%`, background: c.seq[3] }}
-                />
-              </div>
-            </li>
-          ))}
+          {rows.map((r) => {
+            const href =
+              r.category_id === -1
+                ? null
+                : r.category_id === null
+                  ? `/transactions?uncategorized=1&month=${ov.month}`
+                  : `/transactions?category_id=${r.category_id}&month=${ov.month}`;
+            const body = (
+              <>
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
+                  <span className="truncate text-ink">
+                    <span className="mr-1.5">{r.icon}</span>
+                    {r.name}
+                  </span>
+                  <span className="tnum shrink-0 text-ink2">{money(r.total_cents)}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-surface2">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${(r.total_cents / max) * 100}%`, background: c.seq[3] }}
+                  />
+                </div>
+              </>
+            );
+            return (
+              <li key={`${r.category_id}-${r.name}`}>
+                {href ? (
+                  <Link to={href} className="-mx-2 block rounded-lg px-2 py-0.5 hover:bg-surface2/70" title="See these transactions">
+                    {body}
+                  </Link>
+                ) : (
+                  body
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>

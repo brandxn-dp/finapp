@@ -57,12 +57,12 @@ const LIGHT: ChartColors = {
   s4: "#008300",
   s5: "#4a3aa7",
   s6: "#e34948",
-  grid: "#e2d9c3",
-  axis: "#c6bba0",
-  muted: "#8b7f6a",
-  ink: "#2c2317",
-  ink2: "#5c5142",
-  surface: "#faf5e9",
+  grid: "#ddd8c4",
+  axis: "#c2bda4",
+  muted: "#85826b",
+  ink: "#26241a",
+  ink2: "#52503f",
+  surface: "#f8f6ee",
   seq: ["#86b6ef", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab"]
 };
 
@@ -73,12 +73,12 @@ const DARK: ChartColors = {
   s4: "#008300",
   s5: "#9085e9",
   s6: "#e66767",
-  grid: "#383023",
-  axis: "#4a4130",
-  muted: "#94886f",
-  ink: "#f0e8d8",
-  ink2: "#c9bda5",
-  surface: "#221d17",
+  grid: "#2f3226",
+  axis: "#454936",
+  muted: "#8b8a72",
+  ink: "#e9e7d8",
+  ink2: "#bdbba4",
+  surface: "#1d1f17",
   seq: ["#184f95", "#1c5cab", "#256abf", "#2a78d6", "#3987e5", "#5598e7"]
 };
 

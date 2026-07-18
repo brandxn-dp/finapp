@@ -14,9 +14,12 @@ export default function Transactions() {
 
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  const [month, setMonth] = useState("");
+  // Month/category can arrive via URL (e.g. clicking a category on the Dashboard)
+  const [month, setMonth] = useState(() => params.get("month") ?? "");
   const [accountId, setAccountId] = useState("");
-  const [categoryId, setCategoryId] = useState("");
+  const [categoryId, setCategoryId] = useState(() => params.get("category_id") ?? "");
+  const [source, setSource] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [limit, setLimit] = useState(PAGE);
   const [importing, setImporting] = useState(false);
   const [busyAi, setBusyAi] = useState(false);
@@ -38,8 +41,34 @@ export default function Transactions() {
   if (accountId) query.set("account_id", accountId);
   if (categoryId) query.set("category_id", categoryId);
   if (uncategorized) query.set("uncategorized", "1");
+  if (source) query.set("source", source);
   query.set("limit", String(limit));
   const { data: page, loading, refetch } = useApi<TxnPage>(`/api/transactions?${query.toString()}`);
+
+  // Selection only makes sense within the current result set
+  useEffect(() => setSelected(new Set()), [debouncedQ, month, accountId, categoryId, source, uncategorized]);
+
+  const toggleSelected = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const bulkDelete = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`Move ${selected.size} transactions to the trash? You can restore them from Settings → Trash.`)) return;
+    try {
+      const r = await api.post<{ deleted: number }>("/api/transactions/bulk-delete", { ids: [...selected] });
+      toast(`Moved ${r.deleted} transactions to the trash.`, "good");
+      setSelected(new Set());
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
 
   const months = useMemo(() => {
     const out: string[] = [];
@@ -150,6 +179,12 @@ export default function Transactions() {
             <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
           ))}
         </Select>
+        <Select value={source} onChange={(e) => { setSource(e.target.value); setLimit(PAGE); }} title="Filter by how the transaction got here">
+          <option value="">Any source</option>
+          <option value="csv">CSV imports</option>
+          <option value="sync">Bank sync</option>
+          <option value="manual">Manual / restored</option>
+        </Select>
         <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-ink2">
           <input
             type="checkbox"
@@ -165,6 +200,11 @@ export default function Transactions() {
           />
           Uncategorized only
         </label>
+        {selected.size > 0 && (
+          <Button variant="danger" size="sm" onClick={bulkDelete} className="ml-auto">
+            <Icon name="trash" size={14} /> Delete {selected.size} selected
+          </Button>
+        )}
       </div>
 
       <Card className="overflow-hidden !p-0" >
@@ -181,7 +221,18 @@ export default function Transactions() {
             <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs uppercase tracking-wider text-ink3">
-                  <th className="px-5 py-3 font-medium">Date</th>
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      title="Select all loaded"
+                      checked={page.rows.length > 0 && page.rows.every((t) => selected.has(t.id))}
+                      onChange={(e) =>
+                        setSelected(e.target.checked ? new Set(page.rows.map((t) => t.id)) : new Set())
+                      }
+                      className="h-4 w-4 accent-[var(--accent)]"
+                    />
+                  </th>
+                  <th className="px-2 py-3 font-medium">Date</th>
                   <th className="px-3 py-3 font-medium">Payee</th>
                   <th className="px-3 py-3 font-medium">Account</th>
                   <th className="px-3 py-3 font-medium">Category</th>
@@ -192,11 +243,19 @@ export default function Transactions() {
                 {page.rows.map((t) => (
                   <tr
                     key={t.id}
-                    className="cursor-pointer hover:bg-surface2/60"
+                    className={`cursor-pointer hover:bg-surface2/60 ${selected.has(t.id) ? "bg-accent/8" : ""}`}
                     onClick={() => setDetail(t)}
                     title="Click for details"
                   >
-                    <td className="tnum whitespace-nowrap px-5 py-2.5 text-ink2">{shortDate(t.date)}</td>
+                    <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(t.id)}
+                        onChange={() => toggleSelected(t.id)}
+                        className="h-4 w-4 accent-[var(--accent)]"
+                      />
+                    </td>
+                    <td className="tnum whitespace-nowrap px-2 py-2.5 text-ink2">{shortDate(t.date)}</td>
                     <td className="max-w-[260px] px-3 py-2.5">
                       <div className="truncate text-ink">{t.payee || "(no payee)"}</div>
                       {t.memo && t.memo !== t.payee && (

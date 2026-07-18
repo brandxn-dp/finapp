@@ -247,6 +247,18 @@ export interface CategorizeResult {
   error?: string;
 }
 
+export interface TrashItem {
+  id: number;
+  account_id: number;
+  account_name: string | null;
+  date: string;
+  amount_cents: number;
+  payee: string | null;
+  memo: string | null;
+  deleted_at: string;
+  from_sync: number;
+}
+
 export interface Rule {
   id: number;
   pattern: string;

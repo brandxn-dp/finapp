@@ -14,7 +14,9 @@ const NAV = [
 function Brand() {
   return (
     <div className="px-4 pb-4 pt-6 text-center">
-      <div className="gilded font-display text-[24px] font-bold leading-none tracking-wide">FinApp</div>
+      <div className="font-display text-[24px] font-bold leading-none tracking-wide text-ink">
+        Fin<span className="text-accent">App</span>
+      </div>
       <div className="smallcaps mt-1 text-[10px] tracking-[0.28em] text-ink3">self·hosted ledger</div>
       <div className="mt-1.5 select-none text-[13px] leading-none text-ink3/80" aria-hidden="true">
         ❦

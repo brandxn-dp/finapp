@@ -20,20 +20,22 @@ export default function Debts() {
   const { data: plan } = useApi<PayoffPlan>("/api/debts/plan");
   const [extra, setExtra] = useState("0");
   const [extraIncome, setExtraIncome] = useState("");
-  const [cuts, setCuts] = useState<Set<number>>(new Set());
+  /** category_id -> cut percentage (0–100) of that category's average monthly spend */
+  const [cuts, setCuts] = useState<Map<number, number>>(new Map());
   const [sim, setSim] = useState<Simulation | null>(null);
   const [baseline, setBaseline] = useState<Simulation | null>(null);
   const [simBusy, setSimBusy] = useState(false);
   const [editing, setEditing] = useState<Debt | "new" | null>(null);
   const { toast } = useToast();
 
-  /** Extra payment = manual amount + what-if income + checked category trims (25% each). */
+  /** Extra payment = manual amount + what-if income + per-category trims (adjustable %). */
   const totalExtraCents = useMemo(() => {
     const base = Math.max(0, Math.round(Number(extra || 0) * 100));
     const income = Math.max(0, Math.round(Number(extraIncome || 0) * 100));
-    const cutTotal = (plan?.cut_candidates ?? [])
-      .filter((c) => cuts.has(c.category_id))
-      .reduce((s, c) => s + Math.round(c.avg_monthly_cents * 0.25), 0);
+    const cutTotal = (plan?.cut_candidates ?? []).reduce(
+      (s, c) => s + Math.round((c.avg_monthly_cents * (cuts.get(c.category_id) ?? 0)) / 100),
+      0
+    );
     return base + income + cutTotal;
   }, [extra, extraIncome, cuts, plan]);
 
@@ -200,8 +202,8 @@ function PlanCard({
   setExtra: (v: string) => void;
   extraIncome: string;
   setExtraIncome: (v: string) => void;
-  cuts: Set<number>;
-  setCuts: (s: Set<number>) => void;
+  cuts: Map<number, number>;
+  setCuts: (m: Map<number, number>) => void;
   totalExtraCents: number;
   simBusy: boolean;
 }) {
@@ -226,10 +228,10 @@ function PlanCard({
   }
 
   const leftoverTone = plan.leftover_cents > 0 ? "text-good" : "text-bad";
-  const toggleCut = (id: number) => {
-    const next = new Set(cuts);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+  const setCut = (id: number, pct: number) => {
+    const next = new Map(cuts);
+    if (pct <= 0) next.delete(id);
+    else next.set(id, pct);
     setCuts(next);
   };
 
@@ -273,33 +275,46 @@ function PlanCard({
 
         {plan.cut_candidates.length > 0 && (
           <div className="mt-3">
-            <div className="mb-1.5 text-xs text-ink2">Where you could realistically cut — tick to see the effect:</div>
-            <div className="grid gap-1.5 sm:grid-cols-2">
-              {plan.cut_candidates.map((c) => (
-                <label
-                  key={c.category_id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm transition-colors ${
-                    cuts.has(c.category_id) ? "border-accent/60 bg-accent/10" : "border-line hover:bg-surface2"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={cuts.has(c.category_id)}
-                    onChange={() => toggleCut(c.category_id)}
-                    className="h-3.5 w-3.5 accent-[var(--accent)]"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-ink">
-                    {c.icon} Trim {c.name} 25%
-                  </span>
-                  <span className="tnum shrink-0 text-xs text-ink2">
-                    +{money(Math.round(c.avg_monthly_cents * 0.25))}/mo
-                  </span>
-                </label>
-              ))}
+            <div className="mb-1.5 text-xs text-ink2">
+              Where you could realistically cut — drag to choose how much of each:
             </div>
-            <p className="mt-1 text-[11px] text-ink3">
-              Based on your average spend ({money(plan.recurring_wants_cents)}/mo of it is recurring subscriptions —
-              the Savings page lists them).
+            <div className="grid gap-x-6 gap-y-2.5 sm:grid-cols-2">
+              {plan.cut_candidates.map((c) => {
+                const pct = cuts.get(c.category_id) ?? 0;
+                const cents = Math.round((c.avg_monthly_cents * pct) / 100);
+                return (
+                  <div
+                    key={c.category_id}
+                    className={`rounded-lg border px-3 py-2 transition-colors ${
+                      pct > 0 ? "border-accent/50 bg-accent/8" : "border-line"
+                    }`}
+                  >
+                    <div className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="min-w-0 truncate text-ink">
+                        {c.icon} {c.name}
+                        <span className="ml-1.5 text-xs text-ink3">{money(c.avg_monthly_cents)}/mo now</span>
+                      </span>
+                      <span className={`tnum shrink-0 text-xs font-medium ${pct > 0 ? "text-accent" : "text-ink3"}`}>
+                        {pct > 0 ? `−${pct}% → +${money(cents)}/mo` : "keep as is"}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={75}
+                      step={5}
+                      value={pct}
+                      onChange={(e) => setCut(c.category_id, Number(e.target.value))}
+                      className="mt-1.5 block h-1.5 w-full cursor-pointer"
+                      aria-label={`Cut ${c.name} by ${pct} percent`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[11px] text-ink3">
+              Slider caps at 75% — nobody zeroes out a category overnight. {money(plan.recurring_wants_cents)}/mo of
+              this spending is recurring subscriptions (the Savings page lists them).
             </p>
           </div>
         )}

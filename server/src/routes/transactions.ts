@@ -18,6 +18,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       flow?: string;
       kind?: string;
       exclude_transfers?: string;
+      source?: string;
       limit?: string;
       offset?: string;
     };
@@ -37,6 +38,9 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     if (q.exclude_transfers === "1") {
       where.push("(c.kind IS NULL OR c.kind != 'transfer')");
     }
+    if (q.source === "csv") where.push("t.import_hash IS NOT NULL");
+    if (q.source === "sync") where.push("t.external_id IS NOT NULL");
+    if (q.source === "manual") where.push("t.import_hash IS NULL AND t.external_id IS NULL");
     if (q.category_id) {
       where.push("t.category_id = ?");
       params.push(Number(q.category_id));
@@ -81,30 +85,35 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * Find likely duplicate transactions: same account, same amount, dates
-   * within 3 days, similar payee. Exact-hash duplicates are already blocked at
-   * import time — this catches CSV/SimpleFIN overlap and re-exports with
-   * slightly different payee text. Groups are for human review, not auto-delete.
+   * Find likely duplicate transactions. Two matching modes:
+   *  - same account: same amount, dates ≤3 days apart, similar payee
+   *    (catches CSV/SimpleFIN overlap and re-exports)
+   *  - different accounts: same amount, same payee, dates ≤1 day apart
+   *    (catches re-linked banks that came back as new accounts)
+   * Groups are for human review, never auto-deleted.
    */
   app.get("/api/transactions/duplicates", async () => {
     const pairs = db
       .prepare(
         `SELECT t1.id AS id1, t2.id AS id2,
+                t1.account_id AS acct1, t2.account_id AS acct2,
                 t1.payee_norm AS norm1, t2.payee_norm AS norm2,
                 t1.date AS date1, t2.date AS date2,
                 t1.external_id AS ext1, t2.external_id AS ext2
          FROM transactions t1
          JOIN transactions t2
-           ON t1.account_id = t2.account_id
-          AND t1.amount_cents = t2.amount_cents
+           ON t1.amount_cents = t2.amount_cents
           AND t1.id < t2.id
           AND abs(julianday(t1.date) - julianday(t2.date)) <= 3
-         WHERE t1.amount_cents != 0
-         LIMIT 2000`
+          AND substr(t1.payee_norm, 1, 4) = substr(t2.payee_norm, 1, 4)
+         WHERE t1.amount_cents != 0 AND t1.payee_norm != ''
+         LIMIT 5000`
       )
       .all() as Array<{
       id1: number;
       id2: number;
+      acct1: number;
+      acct2: number;
       norm1: string;
       norm2: string;
       date1: string;
@@ -115,13 +124,19 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
     const similar = (a: string, b: string) =>
       a !== "" && b !== "" && (a === b || a.includes(b) || b.includes(a));
+    const dayDiff = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
 
-    // Two settled bank transactions with distinct external ids are genuinely
-    // separate (e.g. daily coffee) unless they landed on the same day twice.
     const suspicious = pairs.filter((p) => {
-      if (!similar(p.norm1, p.norm2)) return false;
-      if (p.ext1 && p.ext2 && p.ext1 !== p.ext2) return p.date1 === p.date2;
-      return true;
+      if (p.acct1 === p.acct2) {
+        if (!similar(p.norm1, p.norm2)) return false;
+        // Two settled bank transactions with distinct external ids are genuinely
+        // separate (e.g. daily coffee) unless they landed on the same day twice.
+        if (p.ext1 && p.ext2 && p.ext1 !== p.ext2) return p.date1 === p.date2;
+        return true;
+      }
+      // Cross-account (e.g. a re-linked bank imported as a new account):
+      // stricter — exact payee match and at most a day of posting drift.
+      return p.norm1 === p.norm2 && dayDiff(p.date1, p.date2) <= 1;
     });
 
     // Union-find to cluster overlapping pairs into groups
@@ -220,22 +235,123 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       .get(id);
   });
 
+  /**
+   * Move a transaction to the trash: snapshot it into deleted_txns (so it can
+   * be listed and restored) and tombstone its identity (so re-syncs and
+   * re-imports can't resurrect it).
+   */
+  const trashOne = db.transaction((id: number): boolean => {
+    const txn = db
+      .prepare(
+        `SELECT t.*, a.name AS account_name FROM transactions t
+         JOIN accounts a ON a.id = t.account_id WHERE t.id = ?`
+      )
+      .get(id) as
+      | {
+          id: number;
+          account_id: number;
+          external_id: string | null;
+          import_hash: string | null;
+          date: string;
+          amount_cents: number;
+          payee: string;
+          memo: string;
+          category_id: number | null;
+          account_name: string;
+        }
+      | undefined;
+    if (!txn) return false;
+    db.prepare(
+      `INSERT INTO deleted_txns (account_id, external_id, import_hash, date, amount_cents, payee, memo, category_id, account_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      txn.account_id,
+      txn.external_id,
+      txn.import_hash,
+      txn.date,
+      txn.amount_cents,
+      txn.payee,
+      txn.memo,
+      txn.category_id,
+      txn.account_name
+    );
+    db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+    return true;
+  });
+
   app.delete("/api/transactions/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const txn = db.prepare("SELECT account_id, external_id, import_hash FROM transactions WHERE id = ?").get(id) as
-      | { account_id: number; external_id: string | null; import_hash: string | null }
+    if (!trashOne(id)) return reply.code(404).send({ error: "Transaction not found." });
+    return { ok: true };
+  });
+
+  app.post("/api/transactions/bulk-delete", async (req, reply) => {
+    const b = req.body as { ids?: number[] };
+    if (!Array.isArray(b?.ids) || b.ids.length === 0) {
+      return reply.code(400).send({ error: "ids array is required." });
+    }
+    if (b.ids.length > 2000) return reply.code(400).send({ error: "Too many at once (max 2,000)." });
+    let deleted = 0;
+    for (const id of b.ids) {
+      if (Number.isInteger(id) && trashOne(id)) deleted++;
+    }
+    return { deleted };
+  });
+
+  // ----- Trash bin -----
+
+  app.get("/api/trash", async () => {
+    return db
+      .prepare(
+        `SELECT rowid AS id, account_id, account_name, date, amount_cents, payee, memo, deleted_at,
+                external_id IS NOT NULL AS from_sync
+         FROM deleted_txns
+         WHERE date IS NOT NULL
+         ORDER BY deleted_at DESC, rowid DESC
+         LIMIT 500`
+      )
+      .all();
+  });
+
+  app.post("/api/trash/:id/restore", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const row = db.prepare("SELECT rowid AS id, * FROM deleted_txns WHERE rowid = ?").get(id) as
+      | {
+          id: number;
+          account_id: number;
+          external_id: string | null;
+          import_hash: string | null;
+          date: string | null;
+          amount_cents: number | null;
+          payee: string | null;
+          memo: string | null;
+          category_id: number | null;
+        }
       | undefined;
-    if (!txn) return reply.code(404).send({ error: "Transaction not found." });
+    if (!row || row.date === null || row.amount_cents === null) {
+      return reply.code(404).send({ error: "Not restorable (deleted before the trash bin existed)." });
+    }
+    const account = db.prepare("SELECT id FROM accounts WHERE id = ?").get(row.account_id);
+    if (!account) return reply.code(400).send({ error: "The account this belonged to no longer exists." });
+    const category = row.category_id
+      ? db.prepare("SELECT id FROM categories WHERE id = ?").get(row.category_id)
+      : null;
     const run = db.transaction(() => {
-      // Tombstone so the next SimpleFIN sync / CSV re-import doesn't resurrect it
-      if (txn.external_id || txn.import_hash) {
-        db.prepare("INSERT INTO deleted_txns (account_id, external_id, import_hash) VALUES (?, ?, ?)").run(
-          txn.account_id,
-          txn.external_id,
-          txn.import_hash
-        );
-      }
-      db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+      db.prepare(
+        `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, category_id, external_id, import_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        row.account_id,
+        row.date,
+        row.amount_cents,
+        row.payee ?? "",
+        normalizePayee(row.payee ?? ""),
+        row.memo ?? "",
+        category ? row.category_id : null,
+        row.external_id,
+        row.import_hash
+      );
+      db.prepare("DELETE FROM deleted_txns WHERE rowid = ?").run(id);
     });
     run();
     return { ok: true };

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api";
-import type { Account, Category, Rule, Settings as AppSettings } from "../lib/api";
-import { money } from "../lib/format";
+import type { Account, Category, Rule, Settings as AppSettings, TrashItem } from "../lib/api";
+import { money, shortDate } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
@@ -25,8 +25,10 @@ export default function Settings() {
       <AccountsCard />
       <RulesCard />
       <CategoriesCard />
+      <TrashCard />
       <p className="text-[11px] text-ink3">
-        FinApp is self-hosted: your data lives in a single SQLite file on your server. The AI features send only
+        FinApp is self-hosted: your data lives in a single SQLite file on your server. Deleted transactions sit in
+        the Trash above and are remembered so bank syncs can't re-import them. The AI features send only
         merchant names and aggregated statistics to the Anthropic API — never account numbers or balances per
         transaction. Insights are educational, not professional financial advice.
       </p>
@@ -332,9 +334,13 @@ function AccountsCard() {
     refetch();
   };
 
+  const total = (accounts ?? []).reduce((s, a) => s + a.balance_cents, 0);
   return (
     <Card
       title="Accounts"
+      collapsible
+      defaultOpen={false}
+      summary={`${accounts?.length ?? 0} accounts · ${money(total)} net`}
       action={
         <Button size="sm" variant="ghost" onClick={autoType} title="Guess types (savings, credit, loan…) from account names">
           <Icon name="sparkle" size={14} /> Auto-detect types
@@ -496,6 +502,57 @@ function RulesCard() {
   );
 }
 
+function TrashCard() {
+  const { data: items, refetch } = useApi<TrashItem[]>("/api/trash");
+  const { toast } = useToast();
+
+  const restore = async (t: TrashItem) => {
+    try {
+      await api.post(`/api/trash/${t.id}/restore`);
+      toast(`Restored ${t.payee || "transaction"}.`, "good");
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  return (
+    <Card
+      title="Trash"
+      collapsible
+      defaultOpen={false}
+      summary={`${items?.length ?? 0} deleted transactions`}
+    >
+      <p className="mb-3 text-xs text-ink3">
+        Deleted transactions land here and stay remembered, so bank syncs and CSV re-imports can't quietly bring
+        them back. Restore anything you deleted by mistake.
+      </p>
+      {!items || items.length === 0 ? (
+        <p className="py-4 text-center text-sm text-ink3">The trash is empty.</p>
+      ) : (
+        <div className="max-h-96 overflow-y-auto">
+          {items.map((t) => (
+            <div key={t.id} className="flex items-center gap-3 border-b border-line py-2 text-sm last:border-0">
+              <span className="tnum w-14 shrink-0 text-xs text-ink2">{shortDate(t.date)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-ink">{t.payee || "(no payee)"}</span>
+                <span className="text-[11px] text-ink3">
+                  {t.account_name ?? "unknown account"} · {t.from_sync ? "bank sync" : "CSV import"} · deleted{" "}
+                  {new Date(t.deleted_at + "Z").toLocaleDateString()}
+                </span>
+              </span>
+              <span className="tnum shrink-0 font-medium text-ink">{money(t.amount_cents)}</span>
+              <Button size="sm" variant="ghost" onClick={() => restore(t)}>
+                Restore
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function CategoriesCard() {
   const { data: categories, refetch } = useApi<Category[]>("/api/categories");
   const [name, setName] = useState("");
@@ -530,7 +587,12 @@ function CategoriesCard() {
   ];
 
   return (
-    <Card title="Categories">
+    <Card
+      title="Categories"
+      collapsible
+      defaultOpen={false}
+      summary={`${categories?.length ?? 0} categories`}
+    >
       <div className="space-y-3">
         {groups.map(([key, label]) => {
           const items = (categories ?? []).filter((c) => c.grp === key);

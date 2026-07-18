@@ -155,9 +155,9 @@ export function PageHeader({
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="gilded font-display text-[27px] font-semibold leading-tight tracking-wide">{title}</h1>
+        <h1 className="font-display text-[27px] font-semibold leading-tight tracking-wide text-ink">{title}</h1>
         {sub && <p className="mt-0.5 text-sm text-ink2">{sub}</p>}
-        <Flourish className="mt-1.5 text-ink3/70" />
+        <Flourish className="mt-1.5 text-accent/60" />
       </div>
       {action && <div className="pb-1">{action}</div>}
     </header>
@@ -170,26 +170,57 @@ export function Card({
   title,
   action,
   children,
-  className = ""
+  className = "",
+  collapsible = false,
+  defaultOpen = true,
+  summary
 }: {
   title?: ReactNode;
   action?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Collapsible sections keep long pages (Settings) tidy. */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  /** Short line shown next to the title while collapsed. */
+  summary?: ReactNode;
 }) {
+  const [open, setOpen] = useState(!collapsible || defaultOpen);
   return (
     <section
-      className={`rounded-[14px] border border-line bg-[var(--glass)] shadow-[0_2px_12px_rgba(60,45,20,0.08)] outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-md ${className}`}
+      className={`rounded-[14px] border border-line bg-[var(--glass)] shadow-[0_2px_12px_rgba(50,50,25,0.07)] outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-md ${className}`}
     >
       {(title || action) && (
-        <header className="flex items-center justify-between gap-3 px-6 pt-4.5 pb-1">
-          {title && (
-            <h2 className="font-display smallcaps text-[16px] font-semibold text-ink">{title}</h2>
-          )}
-          {action}
+        <header
+          className={`flex items-center justify-between gap-3 px-6 pt-4.5 ${open ? "pb-1" : "pb-4"} ${collapsible ? "cursor-pointer select-none" : ""}`}
+          onClick={collapsible ? () => setOpen((o) => !o) : undefined}
+        >
+          <div className="flex min-w-0 items-baseline gap-3">
+            {title && (
+              <h2 className="font-display smallcaps shrink-0 text-[16px] font-semibold text-ink">{title}</h2>
+            )}
+            {collapsible && !open && summary && (
+              <span className="truncate text-xs text-ink3">{summary}</span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2" onClick={(e) => collapsible && e.stopPropagation()}>
+            {(open || !collapsible) && action}
+            {collapsible && (
+              <button
+                className={`rounded-md p-1 text-ink3 transition-transform hover:text-ink ${open ? "rotate-180" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen((o) => !o);
+                }}
+                aria-label={open ? "Collapse" : "Expand"}
+              >
+                <Icon name="chevronDown" size={16} />
+              </button>
+            )}
+          </div>
         </header>
       )}
-      <div className="px-6 py-4">{children}</div>
+      {open && <div className="px-6 py-4">{children}</div>}
     </section>
   );
 }
@@ -207,7 +238,7 @@ export function Stat({
   tone?: "default" | "good" | "bad";
   onClick?: () => void;
 }) {
-  const toneCls = tone === "good" ? "text-good" : tone === "bad" ? "text-bad" : "gilded";
+  const toneCls = tone === "good" ? "text-good" : tone === "bad" ? "text-bad" : "text-ink";
   const inner = (
     <>
       <div className="smallcaps text-[12px] font-medium text-ink3">{label}</div>
@@ -237,8 +268,7 @@ export function Button({ variant = "primary", size = "md", className = "", ...re
     "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
   const sizes = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
   const variants = {
-    primary:
-      "bg-[linear-gradient(180deg,var(--accent-g1),var(--accent-g2))] text-accent-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_3px_rgba(0,0,0,0.2)] hover:brightness-110",
+    primary: "bg-accent text-accent-fg shadow-[0_1px_2px_rgba(0,0,0,0.15)] hover:brightness-108",
     ghost: "border border-line bg-transparent text-ink hover:bg-surface2",
     subtle: "bg-surface2 text-ink hover:brightness-95 dark:hover:brightness-125",
     danger: "border border-line text-bad hover:bg-bad/10"

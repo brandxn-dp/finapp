@@ -126,6 +126,25 @@ const DEFAULT_CATEGORIES: Array<[name: string, grp: string, kind: string, icon: 
   ["Miscellaneous", "other", "expense", "📦"]
 ];
 
+// Lightweight migrations: extend deleted_txns into a full trash bin (snapshots
+// of what was deleted, so items can be listed and restored).
+{
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(deleted_txns)").all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  const add: Array<[string, string]> = [
+    ["date", "TEXT"],
+    ["amount_cents", "INTEGER"],
+    ["payee", "TEXT"],
+    ["memo", "TEXT"],
+    ["category_id", "INTEGER"],
+    ["account_name", "TEXT"]
+  ];
+  for (const [name, type] of add) {
+    if (!cols.has(name)) db.exec(`ALTER TABLE deleted_txns ADD COLUMN ${name} ${type}`);
+  }
+}
+
 const catCount = (db.prepare("SELECT COUNT(*) AS n FROM categories").get() as { n: number }).n;
 if (catCount === 0) {
   const ins = db.prepare(

@@ -18,7 +18,17 @@ export default function Transactions() {
   const [month, setMonth] = useState(() => params.get("month") ?? "");
   const [accountId, setAccountId] = useState("");
   const [categoryId, setCategoryId] = useState(() => params.get("category_id") ?? "");
+  const [categoryMode, setCategoryMode] = useState<"include" | "exclude">("include");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [minAmt, setMinAmt] = useState("");
+  const [maxAmt, setMaxAmt] = useState("");
   const [source, setSource] = useState("");
+  const [flow, setFlow] = useState("");
+  const [sort, setSort] = useState<"date" | "amount" | "payee">("date");
+  const [dir, setDir] = useState<"desc" | "asc">("desc");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [bulkCat, setBulkCat] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [limit, setLimit] = useState(PAGE);
   const [importing, setImporting] = useState(false);
@@ -39,14 +49,69 @@ export default function Transactions() {
   if (debouncedQ) query.set("q", debouncedQ);
   if (month) query.set("month", month);
   if (accountId) query.set("account_id", accountId);
-  if (categoryId) query.set("category_id", categoryId);
+  if (categoryId) query.set(categoryMode === "exclude" ? "exclude_category_ids" : "category_id", categoryId);
   if (uncategorized) query.set("uncategorized", "1");
   if (source) query.set("source", source);
+  if (flow) query.set("flow", flow);
+  if (dateFrom) query.set("date_from", dateFrom);
+  if (dateTo) query.set("date_to", dateTo);
+  if (minAmt) query.set("min_cents", String(Math.round(Number(minAmt) * 100)));
+  if (maxAmt) query.set("max_cents", String(Math.round(Number(maxAmt) * 100)));
+  query.set("sort", sort);
+  query.set("dir", dir);
   query.set("limit", String(limit));
   const { data: page, loading, refetch } = useApi<TxnPage>(`/api/transactions?${query.toString()}`);
 
+  const activeFilters =
+    (accountId ? 1 : 0) +
+    (categoryId ? 1 : 0) +
+    (month ? 1 : 0) +
+    (dateFrom || dateTo ? 1 : 0) +
+    (minAmt || maxAmt ? 1 : 0) +
+    (source ? 1 : 0) +
+    (flow ? 1 : 0) +
+    (uncategorized ? 1 : 0);
+
+  const clearFilters = () => {
+    setMonth("");
+    setAccountId("");
+    setCategoryId("");
+    setCategoryMode("include");
+    setDateFrom("");
+    setDateTo("");
+    setMinAmt("");
+    setMaxAmt("");
+    setSource("");
+    setFlow("");
+    if (uncategorized) {
+      const next = new URLSearchParams(params);
+      next.delete("uncategorized");
+      setParams(next, { replace: true });
+    }
+    setLimit(PAGE);
+  };
+
   // Selection only makes sense within the current result set
-  useEffect(() => setSelected(new Set()), [debouncedQ, month, accountId, categoryId, source, uncategorized]);
+  useEffect(
+    () => setSelected(new Set()),
+    [debouncedQ, month, accountId, categoryId, categoryMode, source, flow, dateFrom, dateTo, minAmt, maxAmt, uncategorized]
+  );
+
+  const bulkCategorize = async (catId: string) => {
+    if (selected.size === 0) return;
+    try {
+      const r = await api.post<{ updated: number }>("/api/transactions/bulk-categorize", {
+        ids: [...selected],
+        category_id: catId === "" ? null : Number(catId)
+      });
+      toast(`Updated ${r.updated} transactions.`, "good");
+      setSelected(new Set());
+      setBulkCat("");
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
 
   const toggleSelected = (id: number) => {
     setSelected((prev) => {
@@ -155,70 +220,60 @@ export default function Transactions() {
       {view === "dupes" ? (
         <DuplicatesView categories={categories ?? []} onChanged={refetch} />
       ) : (
-        <>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
-          <Input placeholder="Search payee or memo…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-8" />
-        </div>
-        <Select value={month} onChange={(e) => { setMonth(e.target.value); setLimit(PAGE); }}>
-          <option value="">All months</option>
-          {months.map((m) => (
-            <option key={m} value={m}>{monthName(m)}</option>
-          ))}
-        </Select>
-        <Select value={accountId} onChange={(e) => { setAccountId(e.target.value); setLimit(PAGE); }}>
-          <option value="">All accounts</option>
-          {accounts?.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </Select>
-        <Select value={categoryId} onChange={(e) => { setCategoryId(e.target.value); setLimit(PAGE); }}>
-          <option value="">All categories</option>
-          {categories?.map((c) => (
-            <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
-          ))}
-        </Select>
-        <Select value={source} onChange={(e) => { setSource(e.target.value); setLimit(PAGE); }} title="Filter by how the transaction got here">
-          <option value="">Any source</option>
-          <option value="csv">CSV imports</option>
-          <option value="sync">Bank sync</option>
-          <option value="manual">Manual / restored</option>
-        </Select>
-        <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-ink2">
-          <input
-            type="checkbox"
-            checked={uncategorized}
-            onChange={(e) => {
-              const next = new URLSearchParams(params);
-              if (e.target.checked) next.set("uncategorized", "1");
-              else next.delete("uncategorized");
-              setParams(next, { replace: true });
-              setLimit(PAGE);
-            }}
-            className="h-4 w-4 accent-[var(--accent)]"
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <FilterSidebar
+            open={filtersOpen}
+            onClose={() => setFiltersOpen(false)}
+            onClear={clearFilters}
+            activeFilters={activeFilters}
+            accounts={accounts ?? []}
+            categories={categories ?? []}
+            months={months}
+            state={{ q, setQ, month, setMonth, accountId, setAccountId, categoryId, setCategoryId, categoryMode, setCategoryMode, dateFrom, setDateFrom, dateTo, setDateTo, minAmt, setMinAmt, maxAmt, setMaxAmt, source, setSource, flow, setFlow, sort, setSort, dir, setDir, uncategorized, setUncategorized: (v: boolean) => { const next = new URLSearchParams(params); if (v) next.set("uncategorized", "1"); else next.delete("uncategorized"); setParams(next, { replace: true }); }, resetLimit: () => setLimit(PAGE) }}
           />
-          Uncategorized only
-        </label>
-        {selected.size > 0 && (
-          <Button variant="danger" size="sm" onClick={bulkDelete} className="ml-auto">
-            <Icon name="trash" size={14} /> Delete {selected.size} selected
-          </Button>
-        )}
-      </div>
 
-      <Card className="overflow-hidden !p-0" >
-        <div className="-mx-5 -my-4 overflow-x-auto">
-          {loading && !page ? (
-            <div className="flex justify-center py-16 text-ink3"><Spinner /></div>
-          ) : !page || page.rows.length === 0 ? (
-            <Empty
-              icon="list"
-              title="No transactions found"
-              sub="Import a CSV or connect SimpleFIN in Settings to pull transactions automatically."
-            />
-          ) : (
-            <table className="w-full min-w-[640px] text-sm">
+          <div className="min-w-0 flex-1 space-y-3">
+            {/* Toolbar: mobile filter button, count, bulk actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setFiltersOpen(true)}>
+                <Icon name="sliders" size={14} /> Filters{activeFilters ? ` (${activeFilters})` : ""}
+              </Button>
+              <span className="text-xs text-ink3">
+                {page ? `${page.total} result${page.total === 1 ? "" : "s"}` : "…"}
+              </span>
+              {selected.size > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  <Select
+                    value={bulkCat}
+                    onChange={(e) => { setBulkCat(e.target.value); bulkCategorize(e.target.value); }}
+                    className="!h-8 !text-xs"
+                    title={`Set category on ${selected.size} selected`}
+                  >
+                    <option value="" disabled>Set category on {selected.size}…</option>
+                    <option value="">— uncategorized —</option>
+                    {categories?.map((c) => (
+                      <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                    ))}
+                  </Select>
+                  <Button variant="danger" size="sm" onClick={bulkDelete}>
+                    <Icon name="trash" size={14} /> Delete {selected.size}
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <Card className="overflow-hidden !p-0">
+              <div className="-mx-5 -my-4 overflow-x-auto">
+                {loading && !page ? (
+                  <div className="flex justify-center py-16 text-ink3"><Spinner /></div>
+                ) : !page || page.rows.length === 0 ? (
+                  <Empty
+                    icon="list"
+                    title="No transactions found"
+                    sub={activeFilters > 0 ? "No transactions match these filters — try clearing some." : "Import a CSV or connect SimpleFIN in Settings to pull transactions automatically."}
+                  />
+                ) : (
+                  <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs uppercase tracking-wider text-ink3">
                   <th className="w-10 px-4 py-3">
@@ -285,20 +340,21 @@ export default function Transactions() {
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </Card>
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </Card>
 
-      {page && page.rows.length < page.total && (
-        <div className="flex justify-center">
-          <Button variant="ghost" size="sm" onClick={() => setLimit((l) => l + PAGE)}>
-            Load more ({page.rows.length} of {page.total})
-          </Button>
+            {page && page.rows.length < page.total && (
+              <div className="flex justify-center">
+                <Button variant="ghost" size="sm" onClick={() => setLimit((l) => l + PAGE)}>
+                  Load more ({page.rows.length} of {page.total})
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
-      )}
-        </>
       )}
 
       {importing && (
@@ -325,6 +381,211 @@ export default function Transactions() {
         />
       )}
     </div>
+  );
+}
+
+// ---------------- Filter & sort sidebar ----------------
+
+interface FilterState {
+  q: string;
+  setQ: (v: string) => void;
+  month: string;
+  setMonth: (v: string) => void;
+  accountId: string;
+  setAccountId: (v: string) => void;
+  categoryId: string;
+  setCategoryId: (v: string) => void;
+  categoryMode: "include" | "exclude";
+  setCategoryMode: (v: "include" | "exclude") => void;
+  dateFrom: string;
+  setDateFrom: (v: string) => void;
+  dateTo: string;
+  setDateTo: (v: string) => void;
+  minAmt: string;
+  setMinAmt: (v: string) => void;
+  maxAmt: string;
+  setMaxAmt: (v: string) => void;
+  source: string;
+  setSource: (v: string) => void;
+  flow: string;
+  setFlow: (v: string) => void;
+  sort: "date" | "amount" | "payee";
+  setSort: (v: "date" | "amount" | "payee") => void;
+  dir: "desc" | "asc";
+  setDir: (v: "desc" | "asc") => void;
+  uncategorized: boolean;
+  setUncategorized: (v: boolean) => void;
+  resetLimit: () => void;
+}
+
+function FilterSidebar({
+  open,
+  onClose,
+  onClear,
+  activeFilters,
+  accounts,
+  categories,
+  months,
+  state: s
+}: {
+  open: boolean;
+  onClose: () => void;
+  onClear: () => void;
+  activeFilters: number;
+  accounts: Account[];
+  categories: Category[];
+  months: string[];
+  state: FilterState;
+}) {
+  const reset = s.resetLimit;
+  const seg = (active: boolean) =>
+    `flex-1 rounded-md px-2 py-1 text-xs ${active ? "bg-accent text-accent-fg" : "text-ink2 hover:bg-surface2"}`;
+
+  const body = (
+    <div className="space-y-4">
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Search</span>
+        <div className="relative">
+          <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
+          <Input placeholder="Payee or memo…" value={s.q} onChange={(e) => s.setQ(e.target.value)} className="w-full pl-8" />
+        </div>
+      </label>
+
+      <div>
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Sort by</span>
+        <div className="flex gap-2">
+          <Select value={s.sort} onChange={(e) => s.setSort(e.target.value as FilterState["sort"])} className="flex-1">
+            <option value="date">Date</option>
+            <option value="amount">Amount</option>
+            <option value="payee">Payee</option>
+          </Select>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => s.setDir(s.dir === "desc" ? "asc" : "desc")}
+            title={s.dir === "desc" ? "Descending" : "Ascending"}
+          >
+            {s.dir === "desc" ? "↓" : "↑"}
+          </Button>
+        </div>
+      </div>
+
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Account</span>
+        <Select value={s.accountId} onChange={(e) => { s.setAccountId(e.target.value); reset(); }} className="w-full">
+          <option value="">All accounts</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </Select>
+      </label>
+
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[11px] font-medium uppercase tracking-wider text-ink3">Category</span>
+          <div className="flex gap-1 rounded-md bg-surface2 p-0.5 text-[11px]">
+            <button className={`rounded px-1.5 ${s.categoryMode === "include" ? "bg-accent text-accent-fg" : "text-ink2"}`} onClick={() => { s.setCategoryMode("include"); reset(); }}>Only</button>
+            <button className={`rounded px-1.5 ${s.categoryMode === "exclude" ? "bg-accent text-accent-fg" : "text-ink2"}`} onClick={() => { s.setCategoryMode("exclude"); reset(); }}>Exclude</button>
+          </div>
+        </div>
+        <Select value={s.categoryId} onChange={(e) => { s.setCategoryId(e.target.value); reset(); }} className="w-full">
+          <option value="">All categories</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+          ))}
+        </Select>
+      </div>
+
+      <div>
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Flow</span>
+        <div className="flex gap-1 rounded-lg bg-surface2 p-0.5">
+          <button className={seg(s.flow === "")} onClick={() => { s.setFlow(""); reset(); }}>All</button>
+          <button className={seg(s.flow === "in")} onClick={() => { s.setFlow("in"); reset(); }}>Money in</button>
+          <button className={seg(s.flow === "out")} onClick={() => { s.setFlow("out"); reset(); }}>Money out</button>
+        </div>
+      </div>
+
+      <div>
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Date range</span>
+        <div className="flex items-center gap-1.5">
+          <Input type="date" value={s.dateFrom} onChange={(e) => { s.setDateFrom(e.target.value); reset(); }} className="w-full !px-2 !text-xs" />
+          <span className="text-ink3">–</span>
+          <Input type="date" value={s.dateTo} onChange={(e) => { s.setDateTo(e.target.value); reset(); }} className="w-full !px-2 !text-xs" />
+        </div>
+        {months.length > 0 && (
+          <Select value={s.month} onChange={(e) => { s.setMonth(e.target.value); reset(); }} className="mt-1.5 w-full !text-xs">
+            <option value="">Or pick a month…</option>
+            {months.map((m) => (
+              <option key={m} value={m}>{monthName(m)}</option>
+            ))}
+          </Select>
+        )}
+      </div>
+
+      <div>
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Amount ($, ignores sign)</span>
+        <div className="flex items-center gap-1.5">
+          <Input inputMode="decimal" placeholder="min" value={s.minAmt} onChange={(e) => { s.setMinAmt(e.target.value.replace(/[^0-9.]/g, "")); reset(); }} className="w-full !px-2 !text-xs" />
+          <span className="text-ink3">–</span>
+          <Input inputMode="decimal" placeholder="max" value={s.maxAmt} onChange={(e) => { s.setMaxAmt(e.target.value.replace(/[^0-9.]/g, "")); reset(); }} className="w-full !px-2 !text-xs" />
+        </div>
+      </div>
+
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Source</span>
+        <Select value={s.source} onChange={(e) => { s.setSource(e.target.value); reset(); }} className="w-full">
+          <option value="">Any source</option>
+          <option value="csv">CSV imports</option>
+          <option value="sync">Bank sync</option>
+          <option value="manual">Manual / restored</option>
+        </Select>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2 text-sm text-ink2">
+        <input
+          type="checkbox"
+          checked={s.uncategorized}
+          onChange={(e) => { s.setUncategorized(e.target.checked); reset(); }}
+          className="h-4 w-4 accent-[var(--accent)]"
+        />
+        Uncategorized only
+      </label>
+
+      {activeFilters > 0 && (
+        <Button variant="ghost" size="sm" onClick={onClear} className="w-full">
+          <Icon name="x" size={14} /> Clear {activeFilters} filter{activeFilters === 1 ? "" : "s"}
+        </Button>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {/* Desktop: sticky sidebar */}
+      <aside className="hidden w-60 shrink-0 lg:block">
+        <Card title="Filter & sort">{body}</Card>
+      </aside>
+
+      {/* Mobile: slide-over */}
+      {open && (
+        <div className="fixed inset-0 z-50 flex lg:hidden" onMouseDown={onClose}>
+          <div className="absolute inset-0 bg-black/45 backdrop-blur-[3px]" />
+          <div
+            className="relative ml-auto h-full w-80 max-w-[85vw] overflow-y-auto border-l border-line bg-surface p-5 shadow-2xl"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-display smallcaps text-[16px] font-semibold text-ink">Filter &amp; sort</h2>
+              <button className="rounded-md p-1 text-ink3 hover:bg-surface2 hover:text-ink" onClick={onClose}>
+                <Icon name="x" size={16} />
+              </button>
+            </div>
+            {body}
+            <Button className="mt-4 w-full" onClick={onClose}>Show results</Button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

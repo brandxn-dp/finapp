@@ -21,6 +21,7 @@ export default function Settings() {
         }
       />
       <SimplefinCard />
+      <CalcPrefsCard />
       <AiCard />
       <AccountsCard />
       <RulesCard />
@@ -398,9 +399,9 @@ function AccountsCard() {
               className="h-4 w-4 shrink-0 accent-[var(--accent)]"
             />
             <div className="min-w-0 flex-1">
-              <div className="text-sm text-ink">
-                {a.name}
-                {a.simplefin_id && <span className="ml-2 text-[10px] uppercase tracking-wider text-accent">simplefin</span>}
+              <div className="flex items-center gap-1.5 text-sm text-ink">
+                <NameEditor name={a.name} onSave={(name) => update(a.id, { name })} />
+                {a.simplefin_id && <span className="text-[10px] uppercase tracking-wider text-accent">simplefin</span>}
               </div>
               <div className="text-xs text-ink3">{a.txn_count} transactions</div>
             </div>
@@ -427,6 +428,75 @@ function AccountsCard() {
         </Button>
       </div>
     </Card>
+  );
+}
+
+function CalcPrefsCard() {
+  const { data: st, refetch } = useApi<AppSettings>("/api/settings");
+  const { toast } = useToast();
+  const toggle = async (include: boolean) => {
+    try {
+      await api.put("/api/settings", { include_credit: include });
+      toast(include ? "Credit-card spending now counts." : "Now counting only checking, savings & cash.", "info");
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+  return (
+    <Card title="Spending & income calculations">
+      <p className="mb-3 text-xs text-ink2">
+        By default, all spending and income figures across the app count only your <strong>checking, savings, and
+        cash</strong> accounts. Credit-card, loan, investment, and retirement accounts are left out — a card purchase
+        and the later payment from checking would otherwise double-count.
+      </p>
+      <label className="flex cursor-pointer items-center gap-2.5 text-sm text-ink">
+        <input
+          type="checkbox"
+          checked={st?.include_credit ?? false}
+          onChange={(e) => toggle(e.target.checked)}
+          className="h-4 w-4 accent-[var(--accent)]"
+        />
+        Also include credit-card accounts in spending &amp; income
+      </label>
+      <p className="mt-1.5 text-[11px] text-ink3">
+        Turn this on if you put most spending on cards and pay them in full — it counts the purchases directly.
+        Loans, investments, and retirement never count either way.
+      </p>
+    </Card>
+  );
+}
+
+function NameEditor({ name, onSave }: { name: string; onSave: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  if (!editing) {
+    return (
+      <button
+        className="truncate text-left text-sm text-ink underline decoration-dotted underline-offset-2 hover:text-accent"
+        onClick={() => {
+          setValue(name);
+          setEditing(true);
+        }}
+        title="Rename account"
+      >
+        {name}
+      </button>
+    );
+  }
+  return (
+    <Input
+      autoFocus
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        const trimmed = value.trim();
+        if (trimmed && trimmed !== name) onSave(trimmed);
+      }}
+      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      className="!h-7 w-56 !px-2 !text-sm"
+    />
   );
 }
 

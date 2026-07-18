@@ -44,42 +44,46 @@ export interface ChartColors {
   ink: string;
   ink2: string;
   surface: string;
-  seq: string[]; // sequential blue ramp, light -> dark
+  bar: string; // single-series magnitude bars/meters (moss accent)
+  seq: string[]; // kept for API compat; all point at the accent family
 }
 
-// Series hues are the validated reference set (re-validated 2026-07 against the
-// parchment surfaces — light passes with the relief rule, dark passes clean).
-// Chrome (grid/axis/ink/surface) follows the Light Academia theme.
+// Earthy chart palette — forest-green + terracotta, validated colorblind-safe
+// against both parchment surfaces (green/terracotta pass in both modes; the
+// 50/30/20 gold third leans on legend + direct labels). Single-magnitude bars
+// use the moss accent so they read as part of the theme, not a foreign chart.
 const LIGHT: ChartColors = {
-  s1: "#2a78d6",
-  s2: "#1baf7a",
-  s3: "#eda100",
-  s4: "#008300",
-  s5: "#4a3aa7",
-  s6: "#e34948",
+  s1: "#1baf7a", // green — income / growth / snowball
+  s2: "#c25a2b", // terracotta — spending / outflow / avalanche
+  s3: "#b08a1e", // ochre gold — third segment
+  s4: "#3f6f93", // stone blue — occasional fourth
+  s5: "#7a5a86", // muted plum
+  s6: "#9c3f1a", // deep rust
   grid: "#ddd8c4",
   axis: "#c2bda4",
   muted: "#85826b",
   ink: "#26241a",
   ink2: "#52503f",
   surface: "#f8f6ee",
-  seq: ["#86b6ef", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab"]
+  bar: "#55703c",
+  seq: ["#7c9a5a", "#6b8a48", "#5b7a3a", "#55703c", "#455d2e", "#374b24"]
 };
 
 const DARK: ChartColors = {
-  s1: "#3987e5",
-  s2: "#199e70",
-  s3: "#c98500",
-  s4: "#008300",
-  s5: "#9085e9",
-  s6: "#e66767",
+  s1: "#199e70",
+  s2: "#d17544",
+  s3: "#cba24a",
+  s4: "#79a6c8",
+  s5: "#b096bd",
+  s6: "#d08a5f",
   grid: "#2f3226",
   axis: "#454936",
   muted: "#8b8a72",
   ink: "#e9e7d8",
   ink2: "#bdbba4",
   surface: "#1d1f17",
-  seq: ["#184f95", "#1c5cab", "#256abf", "#2a78d6", "#3987e5", "#5598e7"]
+  bar: "#9db27a",
+  seq: ["#7f9a5c", "#8ba767", "#9db27a", "#8ba767", "#7f9a5c", "#6f8a4c"]
 };
 
 export function useChartColors(): ChartColors {

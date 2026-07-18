@@ -401,7 +401,7 @@ function SpendingCard({ ov }: { ov: Overview }) {
                 <div className="h-1.5 overflow-hidden rounded-full bg-surface2">
                   <div
                     className="h-full rounded-full"
-                    style={{ width: `${(r.total_cents / max) * 100}%`, background: c.seq[3] }}
+                    style={{ width: `${(r.total_cents / max) * 100}%`, background: c.bar }}
                   />
                 </div>
               </>

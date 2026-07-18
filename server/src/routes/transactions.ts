@@ -19,6 +19,14 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       kind?: string;
       exclude_transfers?: string;
       source?: string;
+      category_ids?: string; // comma-separated for multi-select
+      exclude_category_ids?: string; // comma-separated to filter OUT
+      min_cents?: string; // magnitude (absolute) lower bound
+      max_cents?: string; // magnitude (absolute) upper bound
+      date_from?: string;
+      date_to?: string;
+      sort?: string; // date | amount | payee
+      dir?: string; // asc | desc
       limit?: string;
       offset?: string;
     };
@@ -45,12 +53,45 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       where.push("t.category_id = ?");
       params.push(Number(q.category_id));
     }
+    const idList = (s?: string) =>
+      (s ?? "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter((x) => x !== "")
+        .map((x) => Number(x))
+        .filter((n) => Number.isInteger(n));
+    const inc = idList(q.category_ids);
+    if (inc.length) {
+      where.push(`t.category_id IN (${inc.map(() => "?").join(",")})`);
+      params.push(...inc);
+    }
+    const exc = idList(q.exclude_category_ids);
+    if (exc.length) {
+      where.push(`(t.category_id IS NULL OR t.category_id NOT IN (${exc.map(() => "?").join(",")}))`);
+      params.push(...exc);
+    }
     if (q.account_id) {
       where.push("t.account_id = ?");
       params.push(Number(q.account_id));
     }
     if (q.uncategorized === "1") {
       where.push("t.category_id IS NULL");
+    }
+    if (q.min_cents && Number.isFinite(Number(q.min_cents))) {
+      where.push("abs(t.amount_cents) >= ?");
+      params.push(Math.round(Number(q.min_cents)));
+    }
+    if (q.max_cents && Number.isFinite(Number(q.max_cents))) {
+      where.push("abs(t.amount_cents) <= ?");
+      params.push(Math.round(Number(q.max_cents)));
+    }
+    if (q.date_from && /^\d{4}-\d{2}-\d{2}$/.test(q.date_from)) {
+      where.push("t.date >= ?");
+      params.push(q.date_from);
+    }
+    if (q.date_to && /^\d{4}-\d{2}-\d{2}$/.test(q.date_to)) {
+      where.push("t.date <= ?");
+      params.push(q.date_to);
     }
     if (q.q) {
       where.push("(lower(t.payee) LIKE ? OR lower(t.memo) LIKE ?)");
@@ -60,6 +101,17 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const limit = Math.min(Number(q.limit ?? 100) || 100, 500);
     const offset = Math.max(Number(q.offset ?? 0) || 0, 0);
+
+    // Sort — whitelisted columns only
+    const sortCol =
+      q.sort === "amount" ? "t.amount_cents" : q.sort === "payee" ? "lower(t.payee)" : "t.date";
+    const dir = q.dir === "asc" ? "ASC" : "DESC";
+    const orderSql =
+      q.sort === "amount"
+        ? `ORDER BY ${sortCol} ${dir}, t.id DESC`
+        : q.sort === "payee"
+          ? `ORDER BY ${sortCol} ${dir}, t.date DESC`
+          : `ORDER BY t.date ${dir}, t.id ${dir}`;
 
     const total = (
       db
@@ -77,7 +129,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
          JOIN accounts a ON a.id = t.account_id
          LEFT JOIN categories c ON c.id = t.category_id
          ${whereSql}
-         ORDER BY t.date DESC, t.id DESC
+         ${orderSql}
          LIMIT ? OFFSET ?`
       )
       .all(...params, limit, offset);
@@ -283,6 +335,39 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     const id = Number((req.params as { id: string }).id);
     if (!trashOne(id)) return reply.code(404).send({ error: "Transaction not found." });
     return { ok: true };
+  });
+
+  /** Set the same category on many transactions at once; also teaches the merchant cache. */
+  app.post("/api/transactions/bulk-categorize", async (req, reply) => {
+    const b = req.body as { ids?: number[]; category_id?: number | null };
+    if (!Array.isArray(b?.ids) || b.ids.length === 0) {
+      return reply.code(400).send({ error: "ids array is required." });
+    }
+    const catId = b.category_id ?? null;
+    if (catId !== null) {
+      const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(catId);
+      if (!cat) return reply.code(400).send({ error: "Unknown category." });
+    }
+    const ids = b.ids.filter((id) => Number.isInteger(id));
+    const setCat = db.prepare(
+      catId === null
+        ? "UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE id = ?"
+        : "UPDATE transactions SET category_id = ?, categorized_by = 'manual' WHERE id = ?"
+    );
+    const getNorm = db.prepare("SELECT payee_norm FROM transactions WHERE id = ?");
+    let updated = 0;
+    const run = db.transaction(() => {
+      for (const id of ids) {
+        const changed = catId === null ? setCat.run(id).changes : setCat.run(catId, id).changes;
+        if (changed && catId !== null) {
+          const row = getNorm.get(id) as { payee_norm: string } | undefined;
+          if (row?.payee_norm) rememberManualChoice(row.payee_norm, catId);
+        }
+        updated += changed;
+      }
+    });
+    run();
+    return { updated };
   });
 
   app.post("/api/transactions/bulk-delete", async (req, reply) => {

@@ -1,5 +1,27 @@
-import { db } from "../db.js";
+import { db, getSetting } from "../db.js";
 import { median } from "../util.js";
+
+/**
+ * Account types whose transactions count toward spending/income.
+ * Everyday-money accounts always count; credit cards are opt-in (a card purchase
+ * and its later payment from checking would otherwise double-count). Loans,
+ * investments, and retirement never count as cash spending.
+ */
+export function includedAccountTypes(): string[] {
+  const base = ["checking", "savings", "cash"];
+  if (getSetting("include_credit") === "1") base.push("credit");
+  return base;
+}
+
+/** Safe SQL `IN (...)` list of included account types (values are a fixed whitelist). */
+function includedTypesSql(): string {
+  return "(" + includedAccountTypes().map((t) => `'${t}'`).join(",") + ")";
+}
+
+/** WHERE fragment restricting to counted accounts. Prefix the alias, e.g. accountFilter("t"). */
+function accountFilter(alias: string): string {
+  return `${alias}.account_id IN (SELECT id FROM accounts WHERE type IN ${includedTypesSql()})`;
+}
 
 /** Months as YYYY-MM, newest first, excluding the current (partial) month when asked. */
 function recentMonths(n: number, includeCurrent: boolean): string[] {
@@ -34,6 +56,7 @@ export function monthlyCashflow(months: number): MonthlyCashflow[] {
               SUM(CASE WHEN t.amount_cents < 0 AND (c.kind IS NULL OR c.kind NOT IN ('transfer', 'income')) THEN -t.amount_cents ELSE 0 END) AS expense_cents
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
+       WHERE ${accountFilter("t")}
        GROUP BY month ORDER BY month DESC LIMIT ?`
     )
     .all(months) as MonthlyCashflow[];
@@ -74,6 +97,7 @@ export function spendingByCategory(month: string): CategorySpend[] {
        WHERE t.amount_cents < 0
          AND substr(t.date, 1, 7) = ?
          AND (c.kind IS NULL OR c.kind != 'transfer')
+         AND ${accountFilter("t")}
        GROUP BY t.category_id
        HAVING total_cents > 0
        ORDER BY total_cents DESC`
@@ -113,6 +137,7 @@ export function detectRecurring(): RecurringItem[] {
        WHERE t.amount_cents < 0 AND t.payee_norm != ''
          AND t.date >= date('now', '-15 months')
          AND (c.kind IS NULL OR c.kind != 'transfer')
+         AND ${accountFilter("t")}
        ORDER BY t.payee_norm, t.date`
     )
     .all() as Array<{
@@ -217,6 +242,7 @@ export function suggestBudgets(): BudgetSuggestion[] {
        JOIN categories c ON c.id = t.category_id
        WHERE t.amount_cents < 0 AND c.kind = 'expense'
          AND substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
+         AND ${accountFilter("t")}
        GROUP BY t.category_id, month
        HAVING total_cents > 0`
     )
@@ -292,6 +318,7 @@ export function fiftyThirtyTwenty(monthCount = 3): FiftyThirtyTwenty | null {
        LEFT JOIN categories c ON c.id = t.category_id
        WHERE substr(t.date, 1, 7) IN (${months.map(() => "?").join(",")})
          AND (c.kind IS NULL OR c.kind != 'transfer')
+         AND ${accountFilter("t")}
        GROUP BY month, grp, kind`
     )
     .all(...months) as Array<{ month: string; grp: string; kind: string; total_cents: number }>;
@@ -340,7 +367,8 @@ export interface CutCandidate {
   name: string;
   icon: string;
   grp: string;
-  avg_monthly_cents: number;
+  avg_monthly_cents: number; // realistic — average of recent actual spending
+  budget_cents: number; // this category's monthly budget, or 0 if none set
 }
 
 export interface PayoffAssessment {
@@ -382,7 +410,8 @@ export function payoffAssessment(): PayoffAssessment {
          SUM(CASE WHEN t.amount_cents < 0 AND (c.kind IS NULL OR c.kind NOT IN ('transfer', 'income')) THEN -t.amount_cents ELSE 0 END) AS spending
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
-       WHERE substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})`
+       WHERE substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
+         AND ${accountFilter("t")}`
     )
     .get(...covered) as { income: number | null; spending: number | null };
 
@@ -396,19 +425,24 @@ export function payoffAssessment(): PayoffAssessment {
     }
   ).total;
 
-  // Discretionary categories, biggest first — the realistic places to cut
+  // Every meaningful expense category is a place you *could* cut — including
+  // essentials like rent (moving is drastic, but it's the user's call). Biggest
+  // first. Each carries both its realistic average spend and its budget, so the
+  // planner can trim against either basis.
   const cuts = db
     .prepare(
       `SELECT t.category_id, c.name, c.icon, c.grp,
-              CAST(SUM(-t.amount_cents) / ${n}.0 AS INTEGER) AS avg_monthly_cents
+              CAST(SUM(-t.amount_cents) / ${n}.0 AS INTEGER) AS avg_monthly_cents,
+              COALESCE((SELECT monthly_cents FROM budgets b WHERE b.category_id = t.category_id), 0) AS budget_cents
        FROM transactions t
        JOIN categories c ON c.id = t.category_id
-       WHERE t.amount_cents < 0 AND c.kind = 'expense' AND c.grp IN ('lifestyle', 'other')
+       WHERE t.amount_cents < 0 AND c.kind = 'expense'
          AND substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
+         AND ${accountFilter("t")}
        GROUP BY t.category_id
        HAVING avg_monthly_cents >= 1000
        ORDER BY avg_monthly_cents DESC
-       LIMIT 8`
+       LIMIT 12`
     )
     .all(...covered) as CutCandidate[];
 
@@ -452,7 +486,8 @@ export function emergencyFund(): EmergencyFund {
        FROM transactions t
        JOIN categories c ON c.id = t.category_id
        WHERE t.amount_cents < 0 AND c.grp = 'essential'
-         AND substr(t.date, 1, 7) IN (${months.map(() => "?").join(",")})`
+         AND substr(t.date, 1, 7) IN (${months.map(() => "?").join(",")})
+         AND ${accountFilter("t")}`
     )
     .get(...months) as { monthly: number | null };
   const monthly = row.monthly ?? 0;

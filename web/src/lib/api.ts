@@ -157,6 +157,7 @@ export interface CutCandidate {
   icon: string;
   grp: string;
   avg_monthly_cents: number;
+  budget_cents: number;
 }
 
 export interface PayoffPlan {
@@ -226,6 +227,7 @@ export interface Settings {
   simplefin_connected: boolean;
   simplefin_last_sync: string | null;
   currency: string;
+  include_credit: boolean;
 }
 
 export interface DupTxn extends Txn {

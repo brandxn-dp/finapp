@@ -333,6 +333,9 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       .all();
   });
 
+  // A budget of $0 is a real, meaningful budget ("spend nothing here") — it is
+  // stored, not treated as "no budget". Removing a budget entirely is a separate
+  // DELETE below.
   app.put("/api/budgets", async (req, reply) => {
     const b = req.body as { items?: Array<{ category_id: number; monthly_cents: number }> };
     if (!Array.isArray(b?.items)) return reply.code(400).send({ error: "items array is required." });
@@ -340,15 +343,20 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       `INSERT INTO budgets (category_id, monthly_cents) VALUES (?, ?)
        ON CONFLICT(category_id) DO UPDATE SET monthly_cents = excluded.monthly_cents`
     );
-    const remove = db.prepare("DELETE FROM budgets WHERE category_id = ?");
     const run = db.transaction(() => {
       for (const item of b.items!) {
-        if (!Number.isFinite(item.category_id)) continue;
-        if (item.monthly_cents > 0) upsert.run(item.category_id, Math.round(item.monthly_cents));
-        else remove.run(item.category_id);
+        if (!Number.isFinite(item.category_id) || !Number.isFinite(item.monthly_cents)) continue;
+        upsert.run(item.category_id, Math.max(0, Math.round(item.monthly_cents)));
       }
     });
     run();
+    return { ok: true };
+  });
+
+  app.delete("/api/budgets/:categoryId", async (req, reply) => {
+    const id = Number((req.params as { categoryId: string }).categoryId);
+    const info = db.prepare("DELETE FROM budgets WHERE category_id = ?").run(id);
+    if (info.changes === 0) return reply.code(404).send({ error: "No budget for that category." });
     return { ok: true };
   });
 
@@ -366,7 +374,8 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       ollama_model: llm.ollamaModel,
       simplefin_connected: isConnected(),
       simplefin_last_sync: lastSync(),
-      currency: getSetting("currency") ?? "USD"
+      currency: getSetting("currency") ?? "USD",
+      include_credit: getSetting("include_credit") === "1"
     };
   };
 
@@ -379,7 +388,11 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       ai_model?: string;
       ollama_url?: string;
       ollama_model?: string;
+      include_credit?: boolean;
     };
+    if (b.include_credit !== undefined) {
+      setSetting("include_credit", b.include_credit ? "1" : "0");
+    }
     if (b.ai_provider !== undefined) {
       if (b.ai_provider !== "anthropic" && b.ai_provider !== "ollama") {
         return reply.code(400).send({ error: "ai_provider must be 'anthropic' or 'ollama'." });

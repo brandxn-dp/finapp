@@ -35,6 +35,15 @@ export default function Budget() {
     }
   };
 
+  const removeBudget = async (categoryId: number) => {
+    try {
+      await api.del(`/api/budgets/${categoryId}`);
+      refreshAll();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
   const applyAll = async () => {
     const items = (sugg?.suggestions ?? []).map((s) => ({
       category_id: s.category_id,
@@ -80,7 +89,7 @@ export default function Budget() {
                 key={b.category_id}
                 row={b}
                 spent={spentBy.get(b.category_id) ?? 0}
-                onSave={save}
+                onRemove={() => removeBudget(b.category_id)}
                 onEdit={() => setModal(b)}
               />
             ))}
@@ -158,16 +167,18 @@ export default function Budget() {
 function BudgetLine({
   row,
   spent,
-  onSave,
+  onRemove,
   onEdit
 }: {
   row: BudgetRow;
   spent: number;
-  onSave: (categoryId: number, monthlyCents: number) => void;
+  onRemove: () => void;
   onEdit: () => void;
 }) {
   const c = useChartColors();
-  const pct = Math.min(100, (spent / Math.max(1, row.monthly_cents)) * 100);
+  // A $0 budget means "spend nothing here" — any spend is over.
+  const zero = row.monthly_cents === 0;
+  const pct = zero ? (spent > 0 ? 100 : 0) : Math.min(100, (spent / row.monthly_cents) * 100);
   const over = spent > row.monthly_cents;
 
   return (
@@ -176,6 +187,7 @@ function BudgetLine({
         <span className="truncate text-ink">
           <span className="mr-1.5">{row.icon}</span>
           {row.name}
+          {zero && <span className="ml-2 text-xs text-ink3">no-spend goal</span>}
           {over && (
             <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-bad">
               <Icon name="alert" size={12} /> over by {money(spent - row.monthly_cents)}
@@ -187,7 +199,7 @@ function BudgetLine({
           <button className="ml-2 text-ink3 hover:text-ink" title="Edit name, emoji, or amount" onClick={onEdit}>
             <Icon name="sliders" size={12} />
           </button>
-          <button className="ml-1.5 text-ink3 hover:text-bad" title="Remove budget" onClick={() => onSave(row.category_id, 0)}>
+          <button className="ml-1.5 text-ink3 hover:text-bad" title="Remove budget" onClick={onRemove}>
             <Icon name="x" size={12} />
           </button>
         </span>
@@ -195,7 +207,7 @@ function BudgetLine({
       <div className="h-2 overflow-hidden rounded-full bg-surface2">
         <div
           className="h-full rounded-full transition-[width]"
-          style={{ width: `${pct}%`, background: over ? "var(--bad)" : c.seq[3] }}
+          style={{ width: `${pct}%`, background: over ? "var(--bad)" : c.bar }}
         />
       </div>
     </li>
@@ -232,9 +244,9 @@ function BudgetItemModal({
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
-    const cents = Math.round(Number(amount) * 100);
-    if (!Number.isFinite(cents) || cents <= 0) {
-      toast("Enter a monthly amount above zero.", "bad");
+    const cents = Math.round(Number(amount || 0) * 100);
+    if (!Number.isFinite(cents) || cents < 0) {
+      toast("Enter a monthly amount of zero or more.", "bad");
       return;
     }
     setBusy(true);
@@ -325,8 +337,8 @@ function BudgetItemModal({
         )}
 
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink2">Monthly amount ($)</span>
-          <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" className="w-40" />
+          <span className="mb-1 block text-xs font-medium text-ink2">Monthly amount ($) — 0 sets a no-spend goal</span>
+          <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" className="w-40" placeholder="0" />
         </label>
 
         <div className="flex justify-end gap-2 pt-1">

@@ -142,7 +142,7 @@ function EmergencyFundCard({ ov }: { ov: Overview }) {
             {money(ef.liquid_savings_cents)} liquid vs {money(ef.monthly_essentials_cents)}/mo of essential spending
           </p>
           <div className="relative mt-4 h-2 rounded-full bg-surface2">
-            <div className="h-full rounded-full" style={{ width: `${pct6}%`, background: c.seq[3] }} />
+            <div className="h-full rounded-full" style={{ width: `${pct6}%`, background: c.bar }} />
             <div className="absolute top-[-3px] h-3.5 w-0.5 rounded bg-ink3" style={{ left: `${pos3}%` }} title="3-month target" />
           </div>
           <div className="mt-2 flex justify-between text-[11px] text-ink3">

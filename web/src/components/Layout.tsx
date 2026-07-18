@@ -102,21 +102,34 @@ export default function Layout() {
         </div>
       </main>
 
-      {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-[var(--glass)] backdrop-blur-lg md:hidden">
+      {/* Mobile bottom nav — roomy touch targets, safe-area aware */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-[var(--glass)] backdrop-blur-lg md:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
         {NAV.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             end={item.to === "/"}
             className={({ isActive }) =>
-              `flex flex-1 flex-col items-center gap-0.5 py-2 text-[9px] ${
-                isActive ? "text-accent" : "text-ink3"
+              `flex flex-1 flex-col items-center justify-center gap-1 py-2.5 text-[11px] ${
+                isActive ? "font-medium text-accent" : "text-ink3"
               }`
             }
           >
-            <Icon name={item.icon} size={18} />
-            {item.label.split(" ")[0]}
+            {({ isActive }) => (
+              <>
+                <span
+                  className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
+                    isActive ? "bg-accent/12" : ""
+                  }`}
+                >
+                  <Icon name={item.icon} size={22} />
+                </span>
+                {item.label.split(" ")[0]}
+              </>
+            )}
           </NavLink>
         ))}
       </nav>

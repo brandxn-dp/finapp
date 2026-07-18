@@ -18,26 +18,40 @@ import { ChartTooltip, LegendRow } from "../components/charts";
 export default function Debts() {
   const { data: debts, refetch } = useApi<Debt[]>("/api/debts");
   const { data: plan } = useApi<PayoffPlan>("/api/debts/plan");
-  const [extra, setExtra] = useState("0");
   const [extraIncome, setExtraIncome] = useState("");
-  /** category_id -> cut percentage (0–100) of that category's average monthly spend */
+  /** category_id -> cut percentage (0–100) of that category's basis amount */
   const [cuts, setCuts] = useState<Map<number, number>>(new Map());
+  /** Which number the cut % applies to: realistic (actual avg spend) or the budget. */
+  const [cutBasis, setCutBasis] = useState<"realistic" | "budget">("realistic");
   const [sim, setSim] = useState<Simulation | null>(null);
   const [baseline, setBaseline] = useState<Simulation | null>(null);
   const [simBusy, setSimBusy] = useState(false);
   const [editing, setEditing] = useState<Debt | "new" | null>(null);
   const { toast } = useToast();
 
-  /** Extra payment = manual amount + what-if income + per-category trims (adjustable %). */
-  const totalExtraCents = useMemo(() => {
-    const base = Math.max(0, Math.round(Number(extra || 0) * 100));
-    const income = Math.max(0, Math.round(Number(extraIncome || 0) * 100));
-    const cutTotal = (plan?.cut_candidates ?? []).reduce(
-      (s, c) => s + Math.round((c.avg_monthly_cents * (cuts.get(c.category_id) ?? 0)) / 100),
-      0
-    );
-    return base + income + cutTotal;
-  }, [extra, extraIncome, cuts, plan]);
+  const basisCents = (c: { avg_monthly_cents: number; budget_cents: number }) =>
+    cutBasis === "budget" && c.budget_cents > 0 ? c.budget_cents : c.avg_monthly_cents;
+
+  // Money freed by trimming categories
+  const cutSavingsCents = useMemo(
+    () =>
+      (plan?.cut_candidates ?? []).reduce(
+        (s, c) => s + Math.round((basisCents(c) * (cuts.get(c.category_id) ?? 0)) / 100),
+        0
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cuts, cutBasis, plan]
+  );
+  const extraIncomeCents = Math.max(0, Math.round(Number(extraIncome || 0) * 100));
+
+  /**
+   * Money genuinely available for extra debt payments each month:
+   * current leftover (income − spending, may be negative) + what-if income +
+   * category cuts. If leftover is negative, cuts/income first close that gap;
+   * only the remainder goes to debt. Never below zero.
+   */
+  const availableCents = (plan?.leftover_cents ?? 0) + extraIncomeCents + cutSavingsCents;
+  const totalExtraCents = Math.max(0, availableCents);
 
   // Baseline: minimum payments only — the "do nothing different" yardstick
   useEffect(() => {
@@ -114,12 +128,15 @@ export default function Debts() {
         <>
           <PlanCard
             plan={plan}
-            extra={extra}
-            setExtra={setExtra}
             extraIncome={extraIncome}
             setExtraIncome={setExtraIncome}
             cuts={cuts}
             setCuts={setCuts}
+            cutBasis={cutBasis}
+            setCutBasis={setCutBasis}
+            basisCents={basisCents}
+            cutSavingsCents={cutSavingsCents}
+            extraIncomeCents={extraIncomeCents}
             totalExtraCents={totalExtraCents}
             simBusy={simBusy}
           />
@@ -188,22 +205,28 @@ export default function Debts() {
 
 function PlanCard({
   plan,
-  extra,
-  setExtra,
   extraIncome,
   setExtraIncome,
   cuts,
   setCuts,
+  cutBasis,
+  setCutBasis,
+  basisCents,
+  cutSavingsCents,
+  extraIncomeCents,
   totalExtraCents,
   simBusy
 }: {
   plan: PayoffPlan | null;
-  extra: string;
-  setExtra: (v: string) => void;
   extraIncome: string;
   setExtraIncome: (v: string) => void;
   cuts: Map<number, number>;
   setCuts: (m: Map<number, number>) => void;
+  cutBasis: "realistic" | "budget";
+  setCutBasis: (b: "realistic" | "budget") => void;
+  basisCents: (c: { avg_monthly_cents: number; budget_cents: number }) => number;
+  cutSavingsCents: number;
+  extraIncomeCents: number;
   totalExtraCents: number;
   simBusy: boolean;
 }) {
@@ -227,7 +250,8 @@ function PlanCard({
     );
   }
 
-  const leftoverTone = plan.leftover_cents > 0 ? "text-good" : "text-bad";
+  const leftoverTone = plan.leftover_cents >= 0 ? "text-good" : "text-bad";
+  const deficit = plan.leftover_cents < 0;
   const setCut = (id: number, pct: number) => {
     const next = new Map(cuts);
     if (pct <= 0) next.delete(id);
@@ -255,33 +279,44 @@ function PlanCard({
       <p className="mt-1.5 text-[11px] text-ink3">
         Averages over your last {plan.months_sampled} month{plan.months_sampled > 1 ? "s" : ""} of data. Income counts
         only Salary/Other Income; transfers are invisible.
-        {plan.leftover_cents < 0 &&
-          " You're currently spending more than you earn — the cuts below matter double."}
+        {deficit && " You're spending more than you earn right now — cuts and extra income first close that gap before any goes to debt."}
       </p>
 
       {/* Build the extra payment */}
       <div className="mt-4 border-t border-line pt-3">
-        <div className="smallcaps mb-2 text-[12px] font-medium text-ink2">Build your extra monthly payment</div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-ink2">Extra from leftover:</span>
-          <span className="text-sm text-ink3">$</span>
-          <Input value={extra} onChange={(e) => setExtra(e.target.value.replace(/[^0-9]/g, ""))} className="w-24" inputMode="numeric" />
-          {plan.leftover_cents > 0 && (
-            <Button size="sm" variant="subtle" onClick={() => setExtra(String(Math.floor(plan.leftover_cents / 100)))}>
-              Use full leftover ({money(plan.leftover_cents)})
-            </Button>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="smallcaps text-[12px] font-medium text-ink2">Find money to attack debt</div>
+          {plan.cut_candidates.some((c) => c.budget_cents > 0) && (
+            <div className="flex items-center gap-1 rounded-lg bg-surface2 p-0.5 text-xs">
+              <button
+                className={`rounded-md px-2 py-0.5 ${cutBasis === "realistic" ? "bg-accent text-accent-fg" : "text-ink2"}`}
+                onClick={() => setCutBasis("realistic")}
+                title="Trim against what you actually spent recently"
+              >
+                Realistic
+              </button>
+              <button
+                className={`rounded-md px-2 py-0.5 ${cutBasis === "budget" ? "bg-accent text-accent-fg" : "text-ink2"}`}
+                onClick={() => setCutBasis("budget")}
+                title="Trim against your set budgets"
+              >
+                Budget
+              </button>
+            </div>
           )}
         </div>
 
         {plan.cut_candidates.length > 0 && (
-          <div className="mt-3">
+          <div>
             <div className="mb-1.5 text-xs text-ink2">
-              Where you could realistically cut — drag to choose how much of each:
+              Drag to trim any category — including essentials like rent. 100% means cutting it entirely.
             </div>
             <div className="grid gap-x-6 gap-y-2.5 sm:grid-cols-2">
               {plan.cut_candidates.map((c) => {
                 const pct = cuts.get(c.category_id) ?? 0;
-                const cents = Math.round((c.avg_monthly_cents * pct) / 100);
+                const base = basisCents(c);
+                const cents = Math.round((base * pct) / 100);
+                const usingBudget = cutBasis === "budget" && c.budget_cents > 0;
                 return (
                   <div
                     key={c.category_id}
@@ -292,7 +327,9 @@ function PlanCard({
                     <div className="flex items-baseline justify-between gap-2 text-sm">
                       <span className="min-w-0 truncate text-ink">
                         {c.icon} {c.name}
-                        <span className="ml-1.5 text-xs text-ink3">{money(c.avg_monthly_cents)}/mo now</span>
+                        <span className="ml-1.5 text-xs text-ink3">
+                          {money(base)}/mo {usingBudget ? "budgeted" : "now"}
+                        </span>
                       </span>
                       <span className={`tnum shrink-0 text-xs font-medium ${pct > 0 ? "text-accent" : "text-ink3"}`}>
                         {pct > 0 ? `−${pct}% → +${money(cents)}/mo` : "keep as is"}
@@ -301,7 +338,7 @@ function PlanCard({
                     <input
                       type="range"
                       min={0}
-                      max={75}
+                      max={100}
                       step={5}
                       value={pct}
                       onChange={(e) => setCut(c.category_id, Number(e.target.value))}
@@ -313,8 +350,8 @@ function PlanCard({
               })}
             </div>
             <p className="mt-1.5 text-[11px] text-ink3">
-              Slider caps at 75% — nobody zeroes out a category overnight. {money(plan.recurring_wants_cents)}/mo of
-              this spending is recurring subscriptions (the Savings page lists them).
+              {money(plan.recurring_wants_cents)}/mo of your spending is recurring subscriptions (the Savings page
+              lists them) — often the easiest cuts.
             </p>
           </div>
         )}
@@ -332,12 +369,36 @@ function PlanCard({
           <span className="text-xs text-ink3">/mo (raise, side income…)</span>
         </div>
 
-        <div className="mt-3 flex items-center justify-between rounded-xl bg-accent/10 px-3 py-2">
-          <span className="text-sm font-medium text-ink">Total extra toward debt</span>
-          <span className="tnum font-display text-lg font-semibold text-accent">{money(totalExtraCents)}/mo</span>
+        {/* Breakdown → total */}
+        <div className="mt-3 space-y-1 rounded-xl bg-accent/10 px-3 py-2.5 text-sm">
+          <Row label="Current leftover" cents={plan.leftover_cents} tone={deficit ? "bad" : undefined} />
+          {cutSavingsCents > 0 && <Row label="Freed by cuts" cents={cutSavingsCents} sign />}
+          {extraIncomeCents > 0 && <Row label="Extra income" cents={extraIncomeCents} sign />}
+          <div className="mt-1 flex items-center justify-between border-t border-accent/20 pt-1.5 font-medium text-ink">
+            <span>Total extra toward debt</span>
+            <span className="tnum font-display text-lg font-semibold text-accent">{money(totalExtraCents)}/mo</span>
+          </div>
+          {deficit && totalExtraCents === 0 && (
+            <p className="text-[11px] text-bad">
+              Cuts/income don't yet cover your {money(-plan.leftover_cents)}/mo shortfall — nothing extra reaches debt
+              until they do.
+            </p>
+          )}
         </div>
       </div>
     </Card>
+  );
+}
+
+function Row({ label, cents, sign, tone }: { label: string; cents: number; sign?: boolean; tone?: "bad" }) {
+  return (
+    <div className="flex items-center justify-between text-ink2">
+      <span>{label}</span>
+      <span className={`tnum ${tone === "bad" ? "text-bad" : ""}`}>
+        {sign ? "+" : ""}
+        {money(cents)}
+      </span>
+    </div>
   );
 }
 

@@ -13,6 +13,7 @@
   --bg: #f2ecdd;
   --surface: #faf5e9;
   --surface-2: #eae2cd;
+  --glass: rgba(250, 245, 233, 0.78);
   --line: rgba(72, 56, 28, 0.16);
   --ink: #2c2317;
   --ink-2: #5c5142;
@@ -21,15 +22,25 @@
   --accent: #6c5f23;
   --accent-fg: #fdfaf1;
   --accent-soft: #e6dcb8;
+  --accent-g1: #7d6e2c;
+  --accent-g2: #55491a;
+  --gild-1: #4a3d14;
+  --gild-2: #6c5f23;
+  --gild-3: #94741f;
   --good: #40611c;
   --bad: #a13a2c;
   --warn: #8a6d1c;
+  --page-grad:
+    radial-gradient(1100px 700px at 15% -8%, rgba(255, 252, 240, 0.9), transparent 60%),
+    radial-gradient(900px 600px at 110% 15%, rgba(212, 193, 140, 0.28), transparent 55%),
+    linear-gradient(180deg, #f4efe2 0%, #efe7d2 60%, #ece2c9 100%);
 }
 /* ——— Dark: candlelit study — umber, cream ink, aged gold ——— */
 .dark {
   --bg: #171310;
   --surface: #221d17;
   --surface-2: #2d2720;
+  --glass: rgba(34, 29, 23, 0.7);
   --line: rgba(233, 221, 199, 0.13);
   --ink: #f0e8d8;
   --ink-2: #c9bda5;
@@ -38,9 +49,18 @@
   --accent: #cdb45e;
   --accent-fg: #241d0d;
   --accent-soft: #4a3f1c;
+  --accent-g1: #dcc474;
+  --accent-g2: #a8862e;
+  --gild-1: #f0dfa6;
+  --gild-2: #cdb45e;
+  --gild-3: #a07f2a;
   --good: #94c25e;
   --bad: #d97e63;
   --warn: #cfa543;
+  --page-grad:
+    radial-gradient(1000px 650px at 20% -10%, rgba(205, 180, 94, 0.13), transparent 60%),
+    radial-gradient(800px 550px at 110% 20%, rgba(120, 90, 40, 0.14), transparent 55%),
+    linear-gradient(180deg, #1a1613 0%, #14100c 60%, #100d08 100%);
 }
 
 @theme inline {
@@ -75,9 +95,19 @@ body,
 
 body {
   background-color: var(--bg);
+  background-image: var(--page-grad);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Gilded display text — an Art Nouveau touch for titles and hero figures */
+.gilded {
+  background-image: linear-gradient(160deg, var(--gild-1) 10%, var(--gild-2) 50%, var(--gild-3) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* Lining tabular figures for anything numeric that must align */

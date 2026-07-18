@@ -71,8 +71,9 @@ export function inferAccountType(name: string): string {
   const n = name.toLowerCase();
   if (/(visa|mastercard|amex|american express|discover|credit|card)\b/.test(n)) return "credit";
   if (/(mortgage|heloc|loan|auto ln|student|financing)/.test(n)) return "loan";
+  if (/(401k|401\(k\)|403b|ira\b|roth|pension|retirement|tsp\b)/.test(n)) return "retirement";
   if (/(saving|sav\b|money market|mma|cd\b|certificate)/.test(n)) return "savings";
-  if (/(invest|brokerage|401k|403b|ira|roth|hsa|529)/.test(n)) return "investment";
+  if (/(invest|brokerage|hsa|529)/.test(n)) return "investment";
   if (/(cash|wallet)/.test(n)) return "cash";
   if (/(checking|chk|debit|spending)/.test(n)) return "checking";
   return "checking";

@@ -31,8 +31,22 @@ export interface CategorizeResult {
  *  1. user rules (substring match on payee)
  *  2. merchant cache (payees seen before, AI or manual)
  *  3. Claude, batched — only genuinely new merchants, results cached forever
+ *
+ * `reassess` wipes the AI's previous work (cached AI merchant decisions and
+ * AI/cache-assigned categories) and re-runs from scratch. Manual choices and
+ * rules always survive a reassessment.
  */
-export async function runCategorization(useAi: boolean): Promise<CategorizeResult> {
+export async function runCategorization(useAi: boolean, reassess = false): Promise<CategorizeResult> {
+  if (reassess) {
+    const wipe = db.transaction(() => {
+      db.prepare("DELETE FROM merchant_cache WHERE source = 'ai'").run();
+      db.prepare(
+        "UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE categorized_by IN ('ai', 'cache')"
+      ).run();
+    });
+    wipe();
+  }
+
   const result: CategorizeResult = {
     byRule: applyRules(),
     byCache: applyMerchantCache(),

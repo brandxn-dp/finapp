@@ -57,14 +57,15 @@ export async function generateInsights(): Promise<{ markdown: string; disclaimer
   ].join("\n");
 
   const markdown = await llmComplete({
-    maxTokens: 4000,
+    maxTokens: 1500,
     system:
       "You are the insights writer inside a self-hosted personal budgeting app. " +
-      "You receive aggregated statistics about the user's finances and write a short, friendly monthly check-in in Markdown. " +
-      "Explain what the numbers show and describe how widely-used, general budgeting methodologies (50/30/20, debt snowball vs avalanche, emergency-fund targets, subscription audits) would apply to numbers like these. " +
+      "You receive aggregated statistics about the user's finances and write a brief monthly check-in in Markdown. " +
+      "Reference widely-used, general budgeting methodologies (50/30/20, debt snowball vs avalanche, emergency-fund targets, subscription audits) where they fit the numbers. " +
       "This is educational information, not professional financial advice — do not present it as personalized advice from a licensed advisor, and do not recommend specific financial products, investments, or institutions. " +
-      "Structure: ## What's going well, ## Worth a look, ## Methods that fit your numbers. " +
-      "Keep it under 400 words, concrete, and warm. Refer to the reader as 'you'.",
+      "Structure: ## Going well, ## Worth a look, ## One method to try — at most two short bullets per section. " +
+      "HARD LIMIT: 120 words total. Every bullet must contain a concrete number from the data. Warm but telegraphic; refer to the reader as 'you'. " +
+      "Each time you're asked, pick a different angle than the obvious one so regenerating gives a fresh take.",
     user: summary
   });
   return { markdown, disclaimer: DISCLAIMER };

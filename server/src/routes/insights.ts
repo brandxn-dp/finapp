@@ -50,16 +50,33 @@ export function registerInsightRoutes(app: FastifyInstance): void {
 
   app.get("/api/insights/recurring", async () => {
     const items = detectRecurring();
-    const monthlyTotal = items.reduce((sum, r) => {
-      const perMonth =
-        r.cadence === "weekly" ? r.avg_cents * 4.33 :
-        r.cadence === "biweekly" ? r.avg_cents * 2.17 :
-        r.cadence === "monthly" ? r.avg_cents :
-        r.cadence === "quarterly" ? r.avg_cents / 3 :
-        r.avg_cents / 12;
-      return sum + perMonth;
-    }, 0);
+    const monthlyTotal = items
+      .filter((r) => !r.ignored)
+      .reduce((sum, r) => {
+        const perMonth =
+          r.cadence === "weekly" ? r.avg_cents * 4.33 :
+          r.cadence === "biweekly" ? r.avg_cents * 2.17 :
+          r.cadence === "monthly" ? r.avg_cents :
+          r.cadence === "quarterly" ? r.avg_cents / 3 :
+          r.avg_cents / 12;
+        return sum + perMonth;
+      }, 0);
     return { items, monthly_total_cents: Math.round(monthlyTotal) };
+  });
+
+  /** Mark a detected recurring merchant as "not actually a bill" (or restore it). */
+  app.put("/api/recurring/override", async (req, reply) => {
+    const b = req.body as { payee_norm?: string; ignored?: boolean };
+    if (!b?.payee_norm) return reply.code(400).send({ error: "payee_norm is required." });
+    if (b.ignored) {
+      db.prepare(
+        `INSERT INTO recurring_overrides (payee_norm, status) VALUES (?, 'ignored')
+         ON CONFLICT(payee_norm) DO UPDATE SET status = 'ignored'`
+      ).run(b.payee_norm);
+    } else {
+      db.prepare("DELETE FROM recurring_overrides WHERE payee_norm = ?").run(b.payee_norm);
+    }
+    return { ok: true };
   });
 
   app.get("/api/insights/budget-suggestions", async () => {
@@ -78,10 +95,15 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     }
   });
 
-  /** Run the categorization pipeline: rules → merchant cache → Claude for new merchants. */
+  /**
+   * Run the categorization pipeline: rules → merchant cache → AI for new
+   * merchants. With `reassess`, previously AI-assigned categories and cached
+   * AI merchant decisions are wiped first and everything is re-judged
+   * (manual choices and rules always survive).
+   */
   app.post("/api/categorize/run", async (req) => {
-    const b = (req.body ?? {}) as { use_ai?: boolean };
-    return runCategorization(b.use_ai !== false);
+    const b = (req.body ?? {}) as { use_ai?: boolean; reassess?: boolean };
+    return runCategorization(b.use_ai !== false, b.reassess === true);
   });
 
   /** Re-apply rules; force=true overrides existing categories (rules always win). */

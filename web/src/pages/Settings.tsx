@@ -5,7 +5,7 @@ import { money } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
-const ACCOUNT_TYPES = ["checking", "savings", "credit", "investment", "loan", "cash", "other"];
+const ACCOUNT_TYPES = ["checking", "savings", "credit", "investment", "retirement", "loan", "cash", "other"];
 
 export default function Settings() {
   const { theme, toggle } = useTheme();

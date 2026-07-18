@@ -155,7 +155,7 @@ export function PageHeader({
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="font-display text-[27px] font-semibold leading-tight tracking-wide text-ink">{title}</h1>
+        <h1 className="gilded font-display text-[27px] font-semibold leading-tight tracking-wide">{title}</h1>
         {sub && <p className="mt-0.5 text-sm text-ink2">{sub}</p>}
         <Flourish className="mt-1.5 text-ink3/70" />
       </div>
@@ -179,7 +179,7 @@ export function Card({
 }) {
   return (
     <section
-      className={`rounded-[14px] border border-line bg-surface shadow-[0_1px_3px_rgba(60,45,20,0.07)] outline outline-1 outline-line/60 outline-offset-[-5px] ${className}`}
+      className={`rounded-[14px] border border-line bg-[var(--glass)] shadow-[0_2px_12px_rgba(60,45,20,0.08)] outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-md ${className}`}
     >
       {(title || action) && (
         <header className="flex items-center justify-between gap-3 px-6 pt-4.5 pb-1">
@@ -207,7 +207,7 @@ export function Stat({
   tone?: "default" | "good" | "bad";
   onClick?: () => void;
 }) {
-  const toneCls = tone === "good" ? "text-good" : tone === "bad" ? "text-bad" : "text-ink";
+  const toneCls = tone === "good" ? "text-good" : tone === "bad" ? "text-bad" : "gilded";
   const inner = (
     <>
       <div className="smallcaps text-[12px] font-medium text-ink3">{label}</div>
@@ -216,7 +216,7 @@ export function Stat({
     </>
   );
   const frame =
-    "rounded-[14px] border border-line bg-surface px-5 py-4 outline outline-1 outline-line/60 outline-offset-[-4px]";
+    "rounded-[14px] border border-line bg-[var(--glass)] px-5 py-4 outline outline-1 outline-line/60 outline-offset-[-4px] backdrop-blur-md";
   if (onClick) {
     return (
       <button onClick={onClick} className={`${frame} block w-full cursor-pointer text-left transition-colors hover:bg-surface2/70`} title="Click for details">
@@ -237,7 +237,8 @@ export function Button({ variant = "primary", size = "md", className = "", ...re
     "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
   const sizes = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
   const variants = {
-    primary: "bg-accent text-accent-fg hover:brightness-110",
+    primary:
+      "bg-[linear-gradient(180deg,var(--accent-g1),var(--accent-g2))] text-accent-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_3px_rgba(0,0,0,0.2)] hover:brightness-110",
     ghost: "border border-line bg-transparent text-ink hover:bg-surface2",
     subtle: "bg-surface2 text-ink hover:brightness-95 dark:hover:brightness-125",
     danger: "border border-line text-bad hover:bg-bad/10"
@@ -282,9 +283,9 @@ export function Modal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[8vh]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[8vh] backdrop-blur-[5px]" onMouseDown={onClose}>
       <div
-        className={`w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-[14px] border border-line bg-surface shadow-xl`}
+        className={`w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-[14px] border border-line bg-[var(--glass)] shadow-2xl outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-2xl`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">

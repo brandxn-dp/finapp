@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useApi } from "../lib/api";
+import { api, useApi } from "../lib/api";
 import type { Account, Overview, RecurringItem } from "../lib/api";
 import { money } from "../lib/format";
 import { useChartColors } from "../lib/theme";
@@ -8,7 +8,7 @@ import { LegendRow } from "../components/charts";
 
 export default function Savings() {
   const { data: ov, loading } = useApi<Overview>("/api/insights/overview");
-  const { data: rec } = useApi<{ items: RecurringItem[]; monthly_total_cents: number }>(
+  const { data: rec, refetch: refetchRec } = useApi<{ items: RecurringItem[]; monthly_total_cents: number }>(
     "/api/insights/recurring"
   );
 
@@ -31,7 +31,7 @@ export default function Savings() {
 
       <SavingsAccountsCard />
 
-      <SubscriptionAudit rec={rec} />
+      <SubscriptionAudit rec={rec} onChanged={refetchRec} />
 
       <div className="grid gap-4 md:grid-cols-3">
         <MethodCard
@@ -208,7 +208,7 @@ function SavingsAccountsCard() {
             )}
           </div>
           <div>
-            <div className="smallcaps mb-1.5 text-[11px] font-medium text-ink3">Not counted (debt & invested)</div>
+            <div className="smallcaps mb-1.5 text-[11px] font-medium text-ink3">Not counted (debt, invested & retirement)</div>
             {other.length === 0 ? (
               <p className="text-xs text-ink3">None.</p>
             ) : (
@@ -216,7 +216,9 @@ function SavingsAccountsCard() {
                 <div key={a.id} className="flex items-center justify-between border-b border-line py-1.5 text-sm last:border-0">
                   <span className="min-w-0 truncate text-ink">
                     {a.name}
-                    <span className="ml-1.5 text-xs text-ink3">{a.type}</span>
+                    <span className="ml-1.5 text-xs text-ink3">
+                      {a.type === "retirement" ? "retirement 🔒" : a.type}
+                    </span>
                   </span>
                   <span className={`tnum shrink-0 pl-3 ${a.balance_cents < 0 ? "text-bad" : "text-ink2"}`}>
                     {money(a.balance_cents)}
@@ -228,19 +230,22 @@ function SavingsAccountsCard() {
         </div>
       )}
       <p className="mt-3 border-t border-line pt-2 text-[11px] text-ink3">
-        Types are auto-detected from account names on sync — fix any misclassification in Settings → Accounts
-        (or hit “Auto-detect types” there after a rename).
+        401k/Roth/IRA accounts are marked 🔒 retirement — early withdrawals carry penalties, so they never count
+        toward your emergency fund. Types are auto-detected from account names — fix any misclassification in
+        Settings → Accounts.
       </p>
     </Card>
   );
 }
 
 function SubscriptionAudit({
-  rec
+  rec,
+  onChanged
 }: {
   rec: { items: RecurringItem[]; monthly_total_cents: number } | null;
+  onChanged: () => void;
 }) {
-  const items = rec?.items ?? [];
+  const items = (rec?.items ?? []).filter((r) => !r.ignored);
   return (
     <Card
       title="Subscription audit"
@@ -263,13 +268,25 @@ function SubscriptionAudit({
           </p>
           <div className="grid gap-x-8 gap-y-1 sm:grid-cols-2">
             {items.map((r) => (
-              <div key={r.payee_norm} className="flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
+              <div key={r.payee_norm} className="group flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
                 <span className="min-w-0 truncate text-ink">
                   <span className="mr-1.5">{r.icon ?? "🔁"}</span>
                   {r.payee}
                   <span className="ml-1.5 text-xs text-ink3">{r.cadence}</span>
                 </span>
-                <span className="tnum shrink-0 pl-3 font-medium text-ink">{money(r.avg_cents)}</span>
+                <span className="flex shrink-0 items-center gap-1.5 pl-3">
+                  <span className="tnum font-medium text-ink">{money(r.avg_cents)}</span>
+                  <button
+                    className="hidden text-ink3 hover:text-bad group-hover:inline"
+                    title="Not actually a bill — remove from all calculations"
+                    onClick={async () => {
+                      await api.put("/api/recurring/override", { payee_norm: r.payee_norm, ignored: true });
+                      onChanged();
+                    }}
+                  >
+                    ✕
+                  </button>
+                </span>
               </div>
             ))}
           </div>

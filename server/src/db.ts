@@ -74,6 +74,22 @@ CREATE TABLE IF NOT EXISTS budgets (
   monthly_cents INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS recurring_overrides (
+  payee_norm TEXT PRIMARY KEY,
+  status     TEXT NOT NULL DEFAULT 'ignored',  -- 'ignored' = user says this is not a real bill/subscription
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Tombstones so user-deleted transactions stay deleted across re-syncs/re-imports
+CREATE TABLE IF NOT EXISTS deleted_txns (
+  account_id  INTEGER NOT NULL,
+  external_id TEXT,
+  import_hash TEXT,
+  deleted_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_deleted_ext  ON deleted_txns(account_id, external_id);
+CREATE INDEX IF NOT EXISTS idx_deleted_hash ON deleted_txns(account_id, import_hash);
+
 CREATE TABLE IF NOT EXISTS debts (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   name              TEXT NOT NULL,

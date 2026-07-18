@@ -21,6 +21,7 @@ export default function Transactions() {
   const [importing, setImporting] = useState(false);
   const [busyAi, setBusyAi] = useState(false);
   const [view, setView] = useState<"all" | "dupes">("all");
+  const [detail, setDetail] = useState<Txn | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -50,10 +51,15 @@ export default function Transactions() {
     return out;
   }, []);
 
-  const runAi = async () => {
+  const runAi = async (reassess = false) => {
+    if (reassess && !window.confirm(
+      "Re-assess everything with AI? Previous AI categorizations are discarded and every merchant is re-judged from scratch (your manual choices and rules are kept). This re-classifies all merchants, so it costs accordingly."
+    )) {
+      return;
+    }
     setBusyAi(true);
     try {
-      const r = await api.post<CategorizeResult>("/api/categorize/run");
+      const r = await api.post<CategorizeResult>("/api/categorize/run", { reassess });
       const parts = [
         r.byRule && `${r.byRule} by rules`,
         r.byCache && `${r.byCache} from known merchants`,
@@ -95,9 +101,19 @@ export default function Transactions() {
               <Icon name="list" size={14} />
               {view === "dupes" ? "All transactions" : "Find duplicates"}
             </Button>
-            <Button variant="ghost" size="sm" onClick={runAi} disabled={busyAi}>
+            <Button variant="ghost" size="sm" onClick={() => runAi(false)} disabled={busyAi}>
               {busyAi ? <Spinner /> : <Icon name="sparkle" size={14} />}
               Auto-categorize
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => runAi(true)}
+              disabled={busyAi}
+              title="Discard previous AI categorizations and re-judge every merchant from scratch"
+            >
+              <Icon name="refresh" size={14} />
+              Re-assess all
             </Button>
             <Button size="sm" onClick={() => setImporting(true)}>
               <Icon name="upload" size={14} />
@@ -174,7 +190,12 @@ export default function Transactions() {
               </thead>
               <tbody className="divide-y divide-line">
                 {page.rows.map((t) => (
-                  <tr key={t.id} className="hover:bg-surface2/60">
+                  <tr
+                    key={t.id}
+                    className="cursor-pointer hover:bg-surface2/60"
+                    onClick={() => setDetail(t)}
+                    title="Click for details"
+                  >
                     <td className="tnum whitespace-nowrap px-5 py-2.5 text-ink2">{shortDate(t.date)}</td>
                     <td className="max-w-[260px] px-3 py-2.5">
                       <div className="truncate text-ink">{t.payee || "(no payee)"}</div>
@@ -183,7 +204,7 @@ export default function Transactions() {
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-xs text-ink3">{t.account_name}</td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1.5">
                         <Select
                           value={t.category_id ?? ""}
@@ -232,7 +253,125 @@ export default function Transactions() {
           }}
         />
       )}
+
+      {detail && (
+        <TxnDetailModal
+          txn={detail}
+          categories={categories ?? []}
+          onClose={() => setDetail(null)}
+          onChanged={() => {
+            setDetail(null);
+            refetch();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ---------------- Transaction details / editor ----------------
+
+function TxnDetailModal({
+  txn,
+  categories,
+  onClose,
+  onChanged
+}: {
+  txn: Txn;
+  categories: Category[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const { toast } = useToast();
+  const [payee, setPayee] = useState(txn.payee);
+  const [memo, setMemo] = useState(txn.memo);
+  const [date, setDate] = useState(txn.date);
+  const [amount, setAmount] = useState((txn.amount_cents / 100).toFixed(2));
+  const [categoryId, setCategoryId] = useState<string>(txn.category_id ? String(txn.category_id) : "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    const cents = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(cents)) {
+      toast("That amount doesn't parse.", "bad");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/api/transactions/${txn.id}`, {
+        payee,
+        memo,
+        date,
+        amount_cents: cents,
+        category_id: categoryId === "" ? null : Number(categoryId)
+      });
+      toast("Transaction updated.", "good");
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm("Delete this transaction? It won't come back on future syncs or re-imports.")) return;
+    try {
+      await api.del(`/api/transactions/${txn.id}`);
+      toast("Transaction deleted — it won't reappear on future syncs.", "info");
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  return (
+    <Modal title="Transaction details" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="flex gap-3">
+          <label className="block w-36">
+            <span className="mb-1 block text-xs font-medium text-ink2">Date</span>
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full" />
+          </label>
+          <label className="block w-32">
+            <span className="mb-1 block text-xs font-medium text-ink2">Amount ($, − = out)</span>
+            <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.\-]/g, ""))} inputMode="decimal" className="w-full" />
+          </label>
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Payee</span>
+          <Input value={payee} onChange={(e) => setPayee(e.target.value)} className="w-full" />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Memo</span>
+          <Input value={memo} onChange={(e) => setMemo(e.target.value)} className="w-full" />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Category</span>
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="w-full">
+            <option value="">— uncategorized —</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+            ))}
+          </Select>
+        </label>
+        <p className="text-[11px] text-ink3">
+          {txn.account_name} · {txn.categorized_by ? `categorized by ${txn.categorized_by === "ai" ? "AI" : txn.categorized_by}` : "uncategorized"} ·
+          changing the category also teaches the merchant memory.
+        </p>
+        <div className="flex justify-between border-t border-line pt-3">
+          <Button variant="danger" onClick={remove}>
+            <Icon name="trash" size={14} /> Delete
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button onClick={save} disabled={busy}>
+              {busy ? <Spinner /> : <Icon name="check" size={14} />} Save
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

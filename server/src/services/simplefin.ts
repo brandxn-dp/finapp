@@ -96,9 +96,11 @@ export async function sync(): Promise<SyncResult> {
      ON CONFLICT(simplefin_id) DO UPDATE SET balance_cents = excluded.balance_cents`
   );
   const getAccountId = db.prepare("SELECT id FROM accounts WHERE simplefin_id = ?");
+  // Tombstone check keeps user-deleted transactions deleted across re-syncs
   const insertTxn = db.prepare(
     `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, external_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM deleted_txns dt WHERE dt.account_id = ? AND dt.external_id = ?)
      ON CONFLICT(account_id, external_id) DO NOTHING`
   );
 
@@ -126,6 +128,8 @@ export async function sync(): Promise<SyncResult> {
           payee,
           normalizePayee(payee),
           (t.memo || t.description || "").trim(),
+          t.id,
+          accountId,
           t.id
         ).changes;
       }

@@ -16,6 +16,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       q?: string;
       uncategorized?: string;
       flow?: string;
+      kind?: string;
+      exclude_transfers?: string;
       limit?: string;
       offset?: string;
     };
@@ -28,6 +30,13 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     }
     if (q.flow === "in") where.push("t.amount_cents > 0");
     if (q.flow === "out") where.push("t.amount_cents < 0");
+    if (q.kind) {
+      where.push("c.kind = ?");
+      params.push(q.kind);
+    }
+    if (q.exclude_transfers === "1") {
+      where.push("(c.kind IS NULL OR c.kind != 'transfer')");
+    }
     if (q.category_id) {
       where.push("t.category_id = ?");
       params.push(Number(q.category_id));
@@ -49,7 +58,11 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     const offset = Math.max(Number(q.offset ?? 0) || 0, 0);
 
     const total = (
-      db.prepare(`SELECT COUNT(*) AS n FROM transactions t ${whereSql}`).get(...params) as { n: number }
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM transactions t LEFT JOIN categories c ON c.id = t.category_id ${whereSql}`
+        )
+        .get(...params) as { n: number }
     ).n;
     const rows = db
       .prepare(
@@ -153,11 +166,27 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
   app.patch("/api/transactions/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const b = req.body as { category_id?: number | null; memo?: string; payee?: string };
+    const b = req.body as {
+      category_id?: number | null;
+      memo?: string;
+      payee?: string;
+      date?: string;
+      amount_cents?: number;
+    };
     const txn = db.prepare("SELECT * FROM transactions WHERE id = ?").get(id) as
       | { id: number; payee_norm: string }
       | undefined;
     if (!txn) return reply.code(404).send({ error: "Transaction not found." });
+
+    if (typeof b.date === "string") {
+      const parsed = parseDate(b.date);
+      if (!parsed) return reply.code(400).send({ error: "Unrecognized date." });
+      db.prepare("UPDATE transactions SET date = ? WHERE id = ?").run(parsed, id);
+    }
+    if (b.amount_cents !== undefined) {
+      if (!Number.isFinite(b.amount_cents)) return reply.code(400).send({ error: "Invalid amount." });
+      db.prepare("UPDATE transactions SET amount_cents = ? WHERE id = ?").run(Math.round(b.amount_cents), id);
+    }
 
     if (b.category_id !== undefined) {
       if (b.category_id === null) {
@@ -193,8 +222,22 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
   app.delete("/api/transactions/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const info = db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
-    if (info.changes === 0) return reply.code(404).send({ error: "Transaction not found." });
+    const txn = db.prepare("SELECT account_id, external_id, import_hash FROM transactions WHERE id = ?").get(id) as
+      | { account_id: number; external_id: string | null; import_hash: string | null }
+      | undefined;
+    if (!txn) return reply.code(404).send({ error: "Transaction not found." });
+    const run = db.transaction(() => {
+      // Tombstone so the next SimpleFIN sync / CSV re-import doesn't resurrect it
+      if (txn.external_id || txn.import_hash) {
+        db.prepare("INSERT INTO deleted_txns (account_id, external_id, import_hash) VALUES (?, ?, ?)").run(
+          txn.account_id,
+          txn.external_id,
+          txn.import_hash
+        );
+      }
+      db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+    });
+    run();
     return { ok: true };
   });
 
@@ -218,6 +261,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     }
 
     const exists = db.prepare("SELECT 1 FROM transactions WHERE account_id = ? AND import_hash = ?");
+    const tombstoned = db.prepare("SELECT 1 FROM deleted_txns WHERE account_id = ? AND import_hash = ?");
     const insert = db.prepare(
       `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, import_hash)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -239,7 +283,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         if (b.invert_amounts) amount = -amount;
         const payee = (row.payee ?? "").trim();
         const hash = importHash(b.account_id!, date, amount, payee);
-        if (seenInBatch.has(hash) || exists.get(b.account_id, hash)) {
+        if (seenInBatch.has(hash) || exists.get(b.account_id, hash) || tombstoned.get(b.account_id, hash)) {
           duplicates++;
           continue;
         }

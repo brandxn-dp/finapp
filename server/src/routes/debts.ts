@@ -1,10 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { db } from "../db.js";
 import { simulatePayoff, type DebtInput } from "../services/debts.js";
+import { payoffAssessment } from "../services/insights.js";
 
 export function registerDebtRoutes(app: FastifyInstance): void {
   app.get("/api/debts", async () => {
     return db.prepare("SELECT * FROM debts ORDER BY apr DESC").all();
+  });
+
+  /** The financial picture behind the payoff planner: leftover money + realistic cuts. */
+  app.get("/api/debts/plan", async () => {
+    return payoffAssessment();
   });
 
   app.post("/api/debts", async (req, reply) => {

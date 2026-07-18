@@ -31,7 +31,7 @@ type Popup = "networth" | "income" | "spending" | "recurring" | null;
 
 export default function Dashboard() {
   const { data: ov, loading } = useApi<Overview>("/api/insights/overview");
-  const { data: rec } = useApi<{ items: RecurringItem[]; monthly_total_cents: number }>(
+  const { data: rec, refetch: refetchRec } = useApi<{ items: RecurringItem[]; monthly_total_cents: number }>(
     "/api/insights/recurring"
   );
   const [popup, setPopup] = useState<Popup>(null);
@@ -98,7 +98,7 @@ export default function Dashboard() {
               label="Income this month"
               value={money(thisMonth?.income_cents ?? 0)}
               tone="good"
-              sub="click for sources"
+              sub="salary & income categories only — click for sources"
               onClick={() => setPopup("income")}
             />
             <Stat
@@ -130,7 +130,9 @@ export default function Dashboard() {
       {popup === "networth" && <NetWorthModal total={ov.net_worth_cents} onClose={() => setPopup(null)} />}
       {popup === "income" && <FlowModal flow="in" month={ov.month} onClose={() => setPopup(null)} />}
       {popup === "spending" && <SpendingModal ov={ov} onClose={() => setPopup(null)} />}
-      {popup === "recurring" && <RecurringModal items={rec?.items ?? []} onClose={() => setPopup(null)} />}
+      {popup === "recurring" && (
+        <RecurringModal items={rec?.items ?? []} onChanged={refetchRec} onClose={() => setPopup(null)} />
+      )}
     </div>
   );
 }
@@ -142,6 +144,7 @@ const TYPE_LABELS: Record<string, string> = {
   savings: "Savings",
   credit: "Credit card",
   investment: "Investment",
+  retirement: "Retirement (401k/IRA)",
   loan: "Loan",
   cash: "Cash",
   other: "Other"
@@ -185,9 +188,9 @@ function NetWorthModal({ total, onClose }: { total: number; onClose: () => void 
   );
 }
 
-/** Lists this month's income (flow=in) transactions. */
+/** Lists this month's real income — transactions in income-kind categories only. */
 function FlowModal({ flow, month, onClose }: { flow: "in"; month: string; onClose: () => void }) {
-  const { data } = useApi<TxnPage>(`/api/transactions?month=${month}&flow=${flow}&limit=300`);
+  const { data } = useApi<TxnPage>(`/api/transactions?month=${month}&flow=${flow}&kind=income&limit=300`);
   const rows = data?.rows ?? [];
   const total = rows.reduce((s, t) => s + t.amount_cents, 0);
   return (
@@ -195,7 +198,11 @@ function FlowModal({ flow, month, onClose }: { flow: "in"; month: string; onClos
       {!data ? (
         <div className="flex justify-center py-8 text-ink3"><Spinner /></div>
       ) : rows.length === 0 ? (
-        <Empty icon="wallet" title="No income recorded this month yet" />
+        <Empty
+          icon="wallet"
+          title="No income recorded this month yet"
+          sub="Only transactions categorized as Salary or Other Income count as income — transfers never do. Run Auto-categorize if deposits are still uncategorized."
+        />
       ) : (
         <div className="max-h-[55vh] space-y-1 overflow-y-auto">
           {rows.map((t) => (
@@ -222,7 +229,7 @@ function FlowModal({ flow, month, onClose }: { flow: "in"; month: string; onClos
 
 /** Category breakdown + individual spending transactions for the month. */
 function SpendingModal({ ov, onClose }: { ov: Overview; onClose: () => void }) {
-  const { data } = useApi<TxnPage>(`/api/transactions?month=${ov.month}&flow=out&limit=300`);
+  const { data } = useApi<TxnPage>(`/api/transactions?month=${ov.month}&flow=out&exclude_transfers=1&limit=300`);
   const rows = [...(data?.rows ?? [])].sort((a, b) => a.amount_cents - b.amount_cents);
   return (
     <Modal title="Where the money went" onClose={onClose}>
@@ -267,29 +274,55 @@ function SpendingModal({ ov, onClose }: { ov: Overview; onClose: () => void }) {
   );
 }
 
-function RecurringModal({ items, onClose }: { items: RecurringItem[]; onClose: () => void }) {
+function RecurringModal({
+  items,
+  onChanged,
+  onClose
+}: {
+  items: RecurringItem[];
+  onChanged: () => void;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const toggle = async (r: RecurringItem) => {
+    try {
+      await api.put("/api/recurring/override", { payee_norm: r.payee_norm, ignored: !r.ignored });
+      toast(r.ignored ? `${r.payee} restored as a bill.` : `${r.payee} won't be treated as a bill anymore.`, "info");
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
   return (
     <Modal title="What counts as recurring" onClose={onClose}>
       <p className="mb-2 text-xs text-ink3">
         A merchant is deemed recurring when it charges you at a steady rhythm (weekly to yearly) with a
-        consistent amount, at least three times. Detected from your history — nothing is marked by hand.
+        consistent amount, at least three times. If the detector is wrong, mark it — ignored items drop out of
+        totals, upcoming payments, and the payoff planner.
       </p>
       {items.length === 0 ? (
         <Empty icon="refresh" title="Nothing recurring detected yet" />
       ) : (
         <div className="max-h-[55vh] overflow-y-auto">
           {items.map((r) => (
-            <div key={r.payee_norm} className="flex items-center justify-between border-b border-line py-2 text-sm last:border-0">
-              <span className="min-w-0">
+            <div
+              key={r.payee_norm}
+              className={`flex items-center justify-between gap-2 border-b border-line py-2 text-sm last:border-0 ${r.ignored ? "opacity-50" : ""}`}
+            >
+              <span className="min-w-0 flex-1">
                 <span className="block truncate text-ink">
                   <span className="mr-1.5">{r.icon ?? "🔁"}</span>
                   {r.payee}
+                  {r.ignored && <span className="ml-1.5 text-[10px] uppercase tracking-wider text-ink3">ignored</span>}
                 </span>
                 <span className="text-xs text-ink3">
-                  {r.cadence} · seen {r.occurrences}× · last {shortDate(r.last_date)} · next ~{shortDate(r.next_date)}
+                  {r.cadence} · seen {r.occurrences}× · next ~{shortDate(r.next_date)}
                 </span>
               </span>
-              <span className="tnum shrink-0 pl-3 font-medium text-ink">{money(r.avg_cents)}</span>
+              <span className="tnum shrink-0 font-medium text-ink">{money(r.avg_cents)}</span>
+              <Button size="sm" variant="ghost" onClick={() => toggle(r)}>
+                {r.ignored ? "It's a bill" : "Not a bill"}
+              </Button>
             </div>
           ))}
         </div>
@@ -416,7 +449,11 @@ function AiCheckin() {
 
 function UpcomingCard({ items }: { items: RecurringItem[] }) {
   const upcoming = useMemo(
-    () => [...items].sort((a, b) => a.next_date.localeCompare(b.next_date)).slice(0, 6),
+    () =>
+      items
+        .filter((r) => !r.ignored)
+        .sort((a, b) => a.next_date.localeCompare(b.next_date))
+        .slice(0, 6),
     [items]
   );
   return (

@@ -148,6 +148,26 @@ export interface RecurringItem {
   last_date: string;
   next_date: string;
   occurrences: number;
+  ignored: boolean;
+}
+
+export interface CutCandidate {
+  category_id: number;
+  name: string;
+  icon: string;
+  grp: string;
+  avg_monthly_cents: number;
+}
+
+export interface PayoffPlan {
+  data_ok: boolean;
+  months_sampled: number;
+  avg_income_cents: number;
+  avg_spending_cents: number;
+  leftover_cents: number;
+  min_payments_cents: number;
+  cut_candidates: CutCandidate[];
+  recurring_wants_cents: number;
 }
 
 export interface BudgetSuggestion {

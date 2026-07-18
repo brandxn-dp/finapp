@@ -19,20 +19,39 @@ export interface MonthlyCashflow {
   expense_cents: number; // positive number (money out)
 }
 
-/** Income vs spending per month (transfers excluded). */
+/**
+ * Income vs spending per month.
+ * Income counts ONLY income-kind categories (Salary, Other Income…) — a
+ * transfer or uncategorized deposit is never income. Spending counts money
+ * out that isn't a transfer (uncategorized outflows included so the app is
+ * useful before categorization). Transfers are invisible on both sides.
+ */
 export function monthlyCashflow(months: number): MonthlyCashflow[] {
   const rows = db
     .prepare(
       `SELECT substr(t.date, 1, 7) AS month,
-              SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END) AS income_cents,
-              SUM(CASE WHEN t.amount_cents < 0 THEN -t.amount_cents ELSE 0 END) AS expense_cents
+              SUM(CASE WHEN t.amount_cents > 0 AND c.kind = 'income' THEN t.amount_cents ELSE 0 END) AS income_cents,
+              SUM(CASE WHEN t.amount_cents < 0 AND (c.kind IS NULL OR c.kind NOT IN ('transfer', 'income')) THEN -t.amount_cents ELSE 0 END) AS expense_cents
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
-       WHERE (c.kind IS NULL OR c.kind != 'transfer')
        GROUP BY month ORDER BY month DESC LIMIT ?`
     )
     .all(months) as MonthlyCashflow[];
   return rows.reverse();
+}
+
+/** Months (YYYY-MM) that actually contain non-transfer transactions — the real data window. */
+export function coveredMonths(candidates: string[]): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT substr(t.date, 1, 7) AS month
+       FROM transactions t
+       LEFT JOIN categories c ON c.id = t.category_id
+       WHERE (c.kind IS NULL OR c.kind != 'transfer')`
+    )
+    .all() as Array<{ month: string }>;
+  const have = new Set(rows.map((r) => r.month));
+  return candidates.filter((m) => have.has(m));
 }
 
 export interface CategorySpend {
@@ -72,6 +91,8 @@ export interface RecurringItem {
   last_date: string;
   next_date: string;
   occurrences: number;
+  /** User marked this as "not actually a bill/subscription". */
+  ignored: boolean;
 }
 
 const CADENCES: Array<{ name: RecurringItem["cadence"]; min: number; max: number; days: number }> = [
@@ -145,10 +166,20 @@ export function detectRecurring(): RecurringItem[] {
       avg_cents: Math.round(mean),
       last_date: lastTxn.date,
       next_date: next.toISOString().slice(0, 10),
-      occurrences: txns.length
+      occurrences: txns.length,
+      ignored: false
     });
   }
-  return out.sort((a, b) => b.avg_cents - a.avg_cents);
+
+  // Apply the user's judgements: "this is not actually a bill"
+  const overrides = new Set(
+    (db.prepare("SELECT payee_norm FROM recurring_overrides WHERE status = 'ignored'").all() as Array<{
+      payee_norm: string;
+    }>).map((r) => r.payee_norm)
+  );
+  for (const item of out) item.ignored = overrides.has(item.payee_norm);
+
+  return out.sort((a, b) => Number(a.ignored) - Number(b.ignored) || b.avg_cents - a.avg_cents);
 }
 
 export interface BudgetSuggestion {
@@ -163,9 +194,21 @@ export interface BudgetSuggestion {
   current_budget_cents: number | null;
 }
 
-/** Suggest a monthly budget per category from the last 6 full months of history. */
+/**
+ * Suggest a monthly budget per category.
+ *
+ * Only months that actually contain data count — if your history covers two
+ * months, the math divides by two, not by a fixed six. (Dividing by the full
+ * window was the bug that turned $2,100 rent into a $660 suggestion.)
+ * Regular categories (present most months, e.g. rent) suggest the median of
+ * the months they occur; occasional ones (gifts, travel) spread their total
+ * across the data window.
+ */
 export function suggestBudgets(): BudgetSuggestion[] {
-  const months = recentMonths(6, false);
+  const window = recentMonths(6, true); // include current month so short histories still work
+  const covered = coveredMonths(window);
+  if (covered.length === 0) return [];
+
   const rows = db
     .prepare(
       `SELECT t.category_id, c.name, c.grp, c.icon, substr(t.date, 1, 7) AS month,
@@ -173,10 +216,11 @@ export function suggestBudgets(): BudgetSuggestion[] {
        FROM transactions t
        JOIN categories c ON c.id = t.category_id
        WHERE t.amount_cents < 0 AND c.kind = 'expense'
-         AND substr(t.date, 1, 7) IN (${months.map(() => "?").join(",")})
-       GROUP BY t.category_id, month`
+         AND substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
+       GROUP BY t.category_id, month
+       HAVING total_cents > 0`
     )
-    .all(...months) as Array<{
+    .all(...covered) as Array<{
     category_id: number;
     name: string;
     grp: string;
@@ -201,15 +245,15 @@ export function suggestBudgets(): BudgetSuggestion[] {
 
   const out: BudgetSuggestion[] = [];
   for (const [id, e] of byCat) {
-    // Categories that only appear once aren't budgetable patterns yet
-    if (e.totals.length < 2) continue;
-    // Treat months with no spending in this category as zeros for the median
-    const padded = [...e.totals];
-    while (padded.length < months.length) padded.push(0);
-    const med = median(padded);
-    const avg = Math.round(e.totals.reduce((a, b) => a + b, 0) / months.length);
-    const suggestedRaw = Math.max(med, Math.round(avg * 0.9));
-    const suggested = Math.ceil(suggestedRaw / 500) * 500; // round up to $5
+    // With 2+ months of data, a single occurrence isn't a pattern yet
+    if (e.totals.length < Math.min(2, covered.length)) continue;
+    const med = median(e.totals);
+    const avg = Math.round(e.totals.reduce((a, b) => a + b, 0) / covered.length);
+    const appearRate = e.totals.length / covered.length;
+    // Regular (rent, groceries): budget a typical month it occurs.
+    // Occasional (gifts, travel): spread the total across the window.
+    const base = appearRate >= 0.6 ? Math.max(med, avg) : avg;
+    const suggested = Math.ceil(base / 500) * 500; // round up to $5
     if (suggested <= 0) continue;
     out.push({
       category_id: id,
@@ -259,8 +303,10 @@ export function fiftyThirtyTwenty(monthCount = 3): FiftyThirtyTwenty | null {
   let wants = 0;
   let savings = 0;
   for (const r of rows) {
-    if (r.total_cents > 0) income += r.total_cents;
-    else {
+    if (r.total_cents > 0) {
+      // Only real income counts — transfers/refunds/uncategorized deposits don't
+      if (r.kind === "income") income += r.total_cents;
+    } else {
       const spent = -r.total_cents;
       if (r.grp === "essential") needs += spent;
       else if (r.grp === "savings") savings += spent;
@@ -286,6 +332,107 @@ export function fiftyThirtyTwenty(monthCount = 3): FiftyThirtyTwenty | null {
     needs_pct: Math.round((needs / denom) * 100),
     wants_pct: Math.round((wants / denom) * 100),
     savings_pct: Math.round((savings / denom) * 100)
+  };
+}
+
+export interface CutCandidate {
+  category_id: number;
+  name: string;
+  icon: string;
+  grp: string;
+  avg_monthly_cents: number;
+}
+
+export interface PayoffAssessment {
+  data_ok: boolean;
+  months_sampled: number;
+  avg_income_cents: number;
+  avg_spending_cents: number;
+  leftover_cents: number; // income − spending; can be negative
+  min_payments_cents: number;
+  cut_candidates: CutCandidate[];
+  recurring_wants_cents: number; // detected non-ignored subscriptions per month
+}
+
+/**
+ * The financial picture behind the debt planner: how much genuinely uncommitted
+ * money exists each month, and which discretionary categories are the realistic
+ * places to find more. Based on the covered data window, income = income-kind
+ * categories only, transfers invisible.
+ */
+export function payoffAssessment(): PayoffAssessment {
+  const window = recentMonths(6, true);
+  const covered = coveredMonths(window).slice(0, 3); // up to the 3 most recent months with data
+  const empty: PayoffAssessment = {
+    data_ok: false,
+    months_sampled: 0,
+    avg_income_cents: 0,
+    avg_spending_cents: 0,
+    leftover_cents: 0,
+    min_payments_cents: 0,
+    cut_candidates: [],
+    recurring_wants_cents: 0
+  };
+  if (covered.length === 0) return empty;
+
+  const totals = db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN t.amount_cents > 0 AND c.kind = 'income' THEN t.amount_cents ELSE 0 END) AS income,
+         SUM(CASE WHEN t.amount_cents < 0 AND (c.kind IS NULL OR c.kind NOT IN ('transfer', 'income')) THEN -t.amount_cents ELSE 0 END) AS spending
+       FROM transactions t
+       LEFT JOIN categories c ON c.id = t.category_id
+       WHERE substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})`
+    )
+    .get(...covered) as { income: number | null; spending: number | null };
+
+  const n = covered.length;
+  const income = Math.round((totals.income ?? 0) / n);
+  const spending = Math.round((totals.spending ?? 0) / n);
+
+  const minPayments = (
+    db.prepare("SELECT COALESCE(SUM(min_payment_cents), 0) AS total FROM debts WHERE balance_cents > 0").get() as {
+      total: number;
+    }
+  ).total;
+
+  // Discretionary categories, biggest first — the realistic places to cut
+  const cuts = db
+    .prepare(
+      `SELECT t.category_id, c.name, c.icon, c.grp,
+              CAST(SUM(-t.amount_cents) / ${n}.0 AS INTEGER) AS avg_monthly_cents
+       FROM transactions t
+       JOIN categories c ON c.id = t.category_id
+       WHERE t.amount_cents < 0 AND c.kind = 'expense' AND c.grp IN ('lifestyle', 'other')
+         AND substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
+       GROUP BY t.category_id
+       HAVING avg_monthly_cents >= 1000
+       ORDER BY avg_monthly_cents DESC
+       LIMIT 8`
+    )
+    .all(...covered) as CutCandidate[];
+
+  const recurringWants = detectRecurring()
+    .filter((r) => !r.ignored)
+    .reduce((sum, r) => {
+      const perMonth =
+        r.cadence === "weekly" ? r.avg_cents * 4.33 :
+        r.cadence === "biweekly" ? r.avg_cents * 2.17 :
+        r.cadence === "monthly" ? r.avg_cents :
+        r.cadence === "quarterly" ? r.avg_cents / 3 :
+        r.avg_cents / 12;
+      return sum + perMonth;
+    }, 0);
+
+  return {
+    data_ok: income > 0 || spending > 0,
+    months_sampled: n,
+    avg_income_cents: income,
+    avg_spending_cents: spending,
+    leftover_cents: income - spending,
+    min_payments_cents: minPayments,
+    cut_candidates: cuts,
+    recurring_wants_cents: Math.round(recurringWants)
   };
 }
 

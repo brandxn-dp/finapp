@@ -166,6 +166,7 @@ export interface PayoffPlan {
   avg_income_cents: number;
   avg_spending_cents: number;
   leftover_cents: number;
+  total_budget_cents: number;
   min_payments_cents: number;
   cut_candidates: CutCandidate[];
   recurring_wants_cents: number;

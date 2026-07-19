@@ -78,6 +78,45 @@
     linear-gradient(180deg, #171812 0%, #12130d 55%, #0f100a 100%);
 }
 
+/* ——— Frutiger Aero: glossy glass over sky, water & grass ——— */
+.aero {
+  --bg: #bfe6ff;
+  --surface: rgba(255, 255, 255, 0.62);
+  --surface-2: rgba(255, 255, 255, 0.4);
+  --glass: rgba(255, 255, 255, 0.5);
+  --line: rgba(12, 74, 104, 0.16);
+  --ink: #0b3a54;
+  --ink-2: #2a5f7a;
+  --ink-3: #5786a0;
+  --grid: rgba(12, 74, 104, 0.12);
+  --accent: #0a9bc4;
+  --accent-fg: #ffffff;
+  --accent-soft: #bfeaf5;
+  --good: #12a150;
+  --bad: #e0483d;
+  --warn: #e08a00;
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-display: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  /* Glossy depth — bright top highlight, watery drop shadow */
+  --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 1px 2px rgba(10, 80, 120, 0.15), 0 14px 30px -14px rgba(10, 90, 130, 0.5);
+  --inset-shadow: inset 0 2px 4px rgba(12, 74, 104, 0.15), inset 0 -1px 0 rgba(255, 255, 255, 0.9);
+  --emboss: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 2px 5px rgba(10, 90, 130, 0.4);
+  --grain-opacity: 0;
+  --grain-blend: normal;
+  --weave: none;
+  --weave-opacity: 0;
+  --card-corner: none;
+  /* Sky → water → grass, with a few glassy bubbles floating up */
+  --page-grad:
+    radial-gradient(circle at 18% 88%, rgba(255, 255, 255, 0.55) 0 1.2%, transparent 2%),
+    radial-gradient(circle at 72% 92%, rgba(255, 255, 255, 0.5) 0 1.6%, transparent 2.4%),
+    radial-gradient(circle at 44% 78%, rgba(255, 255, 255, 0.4) 0 1%, transparent 1.6%),
+    radial-gradient(circle at 88% 70%, rgba(255, 255, 255, 0.45) 0 0.9%, transparent 1.5%),
+    radial-gradient(circle at 30% 96%, rgba(255, 255, 255, 0.4) 0 2%, transparent 2.8%),
+    linear-gradient(180deg, #5cb8f5 0%, #8fd4fb 24%, #c7efff 48%, #daf6e2 70%, #97dd8c 100%);
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
@@ -165,6 +204,30 @@ input[type="range"] {
 }
 .btn-emboss {
   box-shadow: var(--emboss);
+}
+
+/* ——— Frutiger Aero glossy overrides ——— */
+.aero .card-skeu {
+  /* Vertical white gloss over the frosted glass */
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.75) 0%,
+    rgba(255, 255, 255, 0.28) 42%,
+    rgba(255, 255, 255, 0.18) 55%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.85);
+  border-radius: 16px;
+}
+.aero .btn-emboss {
+  /* Glassy top-shine on the accent button */
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #23b4d8, #0787ad);
+  border-radius: 10px;
+}
+/* Academia ornament has no place in Aero */
+.aero .acanthus-deco {
+  display: none;
 }
 
 /* Lining tabular figures for anything numeric that must align */

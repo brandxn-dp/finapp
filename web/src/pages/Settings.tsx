@@ -3,23 +3,49 @@ import { api, useApi } from "../lib/api";
 import type { Account, Category, DeletedAccount, Rule, Settings as AppSettings, TrashItem } from "../lib/api";
 import { money, shortDate } from "../lib/format";
 import { useTheme } from "../lib/theme";
+import type { Theme } from "../lib/theme";
 import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 const ACCOUNT_TYPES = ["checking", "savings", "credit", "investment", "retirement", "loan", "cash", "other"];
 
+const THEMES: Array<{ id: Theme; label: string; hint: string; swatch: string }> = [
+  { id: "light", label: "Light Academia", hint: "Warm parchment & sepia ink", swatch: "linear-gradient(135deg,#f1eee4,#e6e1cd 60%,#55703c)" },
+  { id: "dark", label: "Dark Academia", hint: "Candlelit forest study", swatch: "linear-gradient(135deg,#1d1f17,#272a1f 60%,#9db27a)" },
+  { id: "aero", label: "Frutiger Aero", hint: "Glossy sky, water & glass", swatch: "linear-gradient(135deg,#5cb8f5,#c7efff 55%,#97dd8c)" }
+];
+
+function AppearanceCard() {
+  const { theme, setTheme } = useTheme();
+  return (
+    <Card title="Appearance">
+      <p className="mb-3 text-xs text-ink2">Pick a look. Your choice is remembered on this device.</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {THEMES.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTheme(t.id)}
+            className={`rounded-xl border p-3 text-left transition-colors ${
+              theme === t.id ? "border-accent ring-2 ring-accent/40" : "border-line hover:bg-surface2"
+            }`}
+          >
+            <div className="mb-2 h-16 w-full rounded-lg border border-line shadow-inner" style={{ background: t.swatch }} />
+            <div className="flex items-center gap-1.5 text-sm font-medium text-ink">
+              {theme === t.id && <Icon name="check" size={14} className="text-accent" />}
+              {t.label}
+            </div>
+            <div className="text-[11px] text-ink3">{t.hint}</div>
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function Settings() {
-  const { theme, toggle } = useTheme();
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Settings"
-        action={
-          <Button variant="ghost" size="sm" onClick={toggle}>
-            <Icon name={theme === "dark" ? "sun" : "moon"} size={14} />
-            {theme === "dark" ? "Light mode" : "Dark mode"}
-          </Button>
-        }
-      />
+      <PageHeader title="Settings" />
+      <AppearanceCard />
       <SimplefinCard />
       <CalcPrefsCard />
       <AiCard />

@@ -44,7 +44,7 @@ function AcanthusCorner() {
   return (
     <svg
       viewBox="0 0 300 300"
-      className="pointer-events-none fixed -bottom-10 -right-10 z-0 h-[340px] w-[340px] text-ink opacity-[0.05] dark:opacity-[0.06]"
+      className="acanthus-deco pointer-events-none fixed -bottom-10 -right-10 z-0 h-[340px] w-[340px] text-ink opacity-[0.05] dark:opacity-[0.06]"
       fill="none"
       stroke="currentColor"
       strokeWidth="2.2"

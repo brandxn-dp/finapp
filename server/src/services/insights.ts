@@ -376,7 +376,8 @@ export interface PayoffAssessment {
   months_sampled: number;
   avg_income_cents: number;
   avg_spending_cents: number;
-  leftover_cents: number; // income − spending; can be negative
+  leftover_cents: number; // income − actual spending; can be negative
+  total_budget_cents: number; // sum of all set monthly budgets
   min_payments_cents: number;
   cut_candidates: CutCandidate[];
   recurring_wants_cents: number; // detected non-ignored subscriptions per month
@@ -391,12 +392,16 @@ export interface PayoffAssessment {
 export function payoffAssessment(): PayoffAssessment {
   const window = recentMonths(6, true);
   const covered = coveredMonths(window).slice(0, 3); // up to the 3 most recent months with data
+  const totalBudget = (
+    db.prepare("SELECT COALESCE(SUM(monthly_cents), 0) AS total FROM budgets").get() as { total: number }
+  ).total;
   const empty: PayoffAssessment = {
     data_ok: false,
     months_sampled: 0,
     avg_income_cents: 0,
     avg_spending_cents: 0,
     leftover_cents: 0,
+    total_budget_cents: totalBudget,
     min_payments_cents: 0,
     cut_candidates: [],
     recurring_wants_cents: 0
@@ -464,6 +469,7 @@ export function payoffAssessment(): PayoffAssessment {
     avg_income_cents: income,
     avg_spending_cents: spending,
     leftover_cents: income - spending,
+    total_budget_cents: totalBudget,
     min_payments_cents: minPayments,
     cut_candidates: cuts,
     recurring_wants_cents: Math.round(recurringWants)

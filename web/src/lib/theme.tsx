@@ -1,26 +1,40 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
-type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "aero";
 
-const ThemeContext = createContext<{ theme: Theme; toggle: () => void }>({
+const ThemeContext = createContext<{
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+  toggle: () => void;
+}>({
   theme: "light",
+  setTheme: () => {},
   toggle: () => {}
 });
 
+function readTheme(): Theme {
+  const el = document.documentElement;
+  if (el.classList.contains("aero")) return "aero";
+  if (el.classList.contains("dark")) return "dark";
+  return "light";
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() =>
-    document.documentElement.classList.contains("dark") ? "dark" : "light"
-  );
+  const [theme, setTheme] = useState<Theme>(readTheme);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
+    const el = document.documentElement;
+    el.classList.toggle("dark", theme === "dark");
+    el.classList.toggle("aero", theme === "aero");
     localStorage.setItem("finapp-theme", theme);
   }, [theme]);
 
+  // Quick toggle (used by the sidebar/header button) flips light↔dark; from
+  // aero it returns to light. The full three-way choice lives in Settings.
   const toggle = useCallback(() => setTheme((t) => (t === "dark" ? "light" : "dark")), []);
 
-  return <ThemeContext.Provider value={{ theme, toggle }}>{children}</ThemeContext.Provider>;
+  return <ThemeContext.Provider value={{ theme, setTheme, toggle }}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {
@@ -86,7 +100,27 @@ const DARK: ChartColors = {
   seq: ["#7f9a5c", "#8ba767", "#9db27a", "#8ba767", "#7f9a5c", "#6f8a4c"]
 };
 
+// Frutiger Aero — bright blue/teal/green on glassy light surfaces. Uses the
+// validated reference blue+green hues, which happen to be exactly this theme's
+// language.
+const AERO: ChartColors = {
+  s1: "#1f7fd0", // blue — income / snowball
+  s2: "#12a08a", // teal-green — spending / avalanche
+  s3: "#e59500", // amber
+  s4: "#3aa655",
+  s5: "#7a5bd0",
+  s6: "#e0483d",
+  grid: "rgba(10,80,120,0.12)",
+  axis: "rgba(10,80,120,0.28)",
+  muted: "#3f7594",
+  ink: "#0b3a54",
+  ink2: "#2a5f7a",
+  surface: "#f2fbff",
+  bar: "#0a9bc4",
+  seq: ["#8fd0ea", "#5cbbe0", "#2ba3d4", "#0a9bc4", "#0883ab", "#086a8a"]
+};
+
 export function useChartColors(): ChartColors {
   const { theme } = useTheme();
-  return theme === "dark" ? DARK : LIGHT;
+  return theme === "dark" ? DARK : theme === "aero" ? AERO : LIGHT;
 }

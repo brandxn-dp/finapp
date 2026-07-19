@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api, useApi } from "../lib/api";
 import type { BudgetRow, BudgetSuggestion, Category, CategorySpend } from "../lib/api";
 import { currentMonth, money, monthNameLong } from "../lib/format";
@@ -185,8 +186,14 @@ function BudgetLine({
     <li>
       <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
         <span className="truncate text-ink">
-          <span className="mr-1.5">{row.icon}</span>
-          {row.name}
+          <Link
+            to={`/transactions?category_id=${row.category_id}&month=${currentMonth()}`}
+            className="hover:text-accent hover:underline"
+            title="See this month's transactions in this category"
+          >
+            <span className="mr-1.5">{row.icon}</span>
+            {row.name}
+          </Link>
           {zero && <span className="ml-2 text-xs text-ink3">no-spend goal</span>}
           {over && (
             <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-bad">

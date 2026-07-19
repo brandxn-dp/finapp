@@ -10,6 +10,7 @@
 
 /* ——— Light: linen, pressed leaves, clay — earthy academia ——— */
 :root {
+  color-scheme: light;
   --bg: #efece2;
   --surface: #f8f6ee;
   --surface-2: #e7e3d3;
@@ -46,6 +47,7 @@
 }
 /* ——— Dark: forest floor at dusk — soil, moss, bark ——— */
 .dark {
+  color-scheme: dark;
   --bg: #141410;
   --surface: #1d1f17;
   --surface-2: #272a1f;
@@ -107,14 +109,11 @@
   --weave: none;
   --weave-opacity: 0;
   --card-corner: none;
-  /* Sky → water → grass, with a few glassy bubbles floating up */
-  --page-grad:
-    radial-gradient(circle at 18% 88%, rgba(255, 255, 255, 0.55) 0 1.2%, transparent 2%),
-    radial-gradient(circle at 72% 92%, rgba(255, 255, 255, 0.5) 0 1.6%, transparent 2.4%),
-    radial-gradient(circle at 44% 78%, rgba(255, 255, 255, 0.4) 0 1%, transparent 1.6%),
-    radial-gradient(circle at 88% 70%, rgba(255, 255, 255, 0.45) 0 0.9%, transparent 1.5%),
-    radial-gradient(circle at 30% 96%, rgba(255, 255, 255, 0.4) 0 2%, transparent 2.8%),
-    linear-gradient(180deg, #5cb8f5 0%, #8fd4fb 24%, #c7efff 48%, #daf6e2 70%, #97dd8c 100%);
+  /* Fallback sky→grass gradient; the real scenic backdrop is aero-bg.svg,
+     painted full-bleed by the .aero body::before override below. */
+  --page-grad: linear-gradient(180deg, #3fa9e8 0%, #8fd4fb 30%, #c7efff 55%, #daf6e2 74%, #6fc45a 100%);
+  /* Segoe runs larger than Garamond — pull the root size back to normal */
+  font-size: 15.5px;
 }
 
 @theme inline {
@@ -206,28 +205,119 @@ input[type="range"] {
   box-shadow: var(--emboss);
 }
 
-/* ——— Frutiger Aero glossy overrides ——— */
+/* ═══ Frutiger Aero total reskin ═══
+   Selecting the aero theme should feel like a different app: a scenic
+   sky/grass backdrop, heavy frosted glass, gel pill buttons, glossy chrome. */
+
+/* The scenic backdrop rides the (otherwise unused) grain layer so it stays
+   truly fixed on every platform, behind all content. */
+.aero body::before {
+  background-image: url("/aero-bg.svg");
+  background-size: cover;
+  background-position: center;
+  opacity: 1;
+  mix-blend-mode: normal;
+}
+
+/* Cards: deep frosted glass with a vertical specular gloss */
 .aero .card-skeu {
-  /* Vertical white gloss over the frosted glass */
   background-image: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.75) 0%,
-    rgba(255, 255, 255, 0.28) 42%,
+    rgba(255, 255, 255, 0.78) 0%,
+    rgba(255, 255, 255, 0.3) 42%,
     rgba(255, 255, 255, 0.18) 55%,
-    rgba(255, 255, 255, 0.4) 100%
+    rgba(255, 255, 255, 0.42) 100%
   );
-  border-color: rgba(255, 255, 255, 0.85);
-  border-radius: 16px;
+  border-color: rgba(255, 255, 255, 0.9);
+  border-radius: 18px;
+  outline-color: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(18px) saturate(1.5);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
 }
+
+/* Buttons become aqua gel pills */
 .aero .btn-emboss {
-  /* Glassy top-shine on the accent button */
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 48%),
-    linear-gradient(180deg, #23b4d8, #0787ad);
-  border-radius: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(4, 86, 116, 0.55);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.65), rgba(255, 255, 255, 0.08) 48%, rgba(255, 255, 255, 0) 52%, rgba(255, 255, 255, 0.25) 100%),
+    linear-gradient(180deg, #2fc0e4, #0787ad);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -5px 9px rgba(255, 255, 255, 0.25),
+    0 2px 6px rgba(8, 90, 125, 0.45);
+  text-shadow: 0 -1px 1px rgba(0, 45, 65, 0.35);
 }
-/* Academia ornament has no place in Aero */
+.aero .btn-ghost,
+.aero .btn-subtle {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.45));
+  box-shadow: inset 0 1px 0 #fff, 0 1px 4px rgba(10, 80, 120, 0.22);
+}
+.aero .btn-danger {
+  border-radius: 999px;
+  border: 1px solid rgba(190, 45, 35, 0.45);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 236, 233, 0.5));
+  box-shadow: inset 0 1px 0 #fff, 0 1px 4px rgba(150, 30, 20, 0.2);
+}
+.aero .btn-ghost:hover,
+.aero .btn-subtle:hover,
+.aero .btn-danger:hover {
+  filter: brightness(1.05) saturate(1.1);
+}
+
+/* Inputs: bright water-glass wells */
+.aero .field-skeu {
+  background-color: rgba(255, 255, 255, 0.75);
+  border-color: rgba(255, 255, 255, 0.95);
+  border-radius: 10px;
+  box-shadow: inset 0 2px 4px rgba(12, 74, 104, 0.14), inset 0 -1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+/* Nav chrome: heavy frosted glass panes over the scene */
+.aero .app-sidebar,
+.aero .app-bottomnav {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));
+  border-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+}
+.aero .app-sidebar nav a {
+  border-radius: 999px;
+}
+.aero .app-sidebar nav a[aria-current="page"] {
+  color: #056e91;
+  background-color: rgba(10, 155, 196, 0.14);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.25) 55%, rgba(255, 255, 255, 0.55));
+  box-shadow: inset 0 1px 0 #fff, inset 0 0 0 1px rgba(255, 255, 255, 0.65), 0 1px 4px rgba(10, 80, 120, 0.25);
+}
+.aero .app-bottomnav a[aria-current="page"] > span:first-child {
+  border-radius: 999px;
+  background-color: rgba(10, 155, 196, 0.14);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.3) 60%, rgba(255, 255, 255, 0.55));
+  box-shadow: inset 0 1px 0 #fff, 0 1px 3px rgba(10, 80, 120, 0.25);
+}
+
+/* Modal chrome: watery scrim instead of ink-black */
+.aero .modal-overlay {
+  background-color: rgba(25, 95, 140, 0.4);
+}
+
+/* Typography: no small caps, no ornament — clean humanist headings with a glow */
+.aero .smallcaps {
+  font-variant: normal;
+  letter-spacing: 0.02em;
+}
+.aero .page-title {
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7), 0 2px 14px rgba(255, 255, 255, 0.6);
+}
+.aero .flourish-deco,
+.aero .brand-fleuron,
 .aero .acanthus-deco {
   display: none;
+}
+
+.aero ::selection {
+  background: rgba(35, 180, 216, 0.35);
 }
 
 /* Lining tabular figures for anything numeric that must align */

@@ -324,18 +324,52 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   // ----- Budgets -----
+
+  /** Number of line items a category has (0 = plain flat budget). */
+  const itemCount = (categoryId: number): number =>
+    (db.prepare("SELECT COUNT(*) AS n FROM budget_items WHERE category_id = ?").get(categoryId) as {
+      n: number;
+    }).n;
+
+  /**
+   * If a category has line items, its budget total is the sum of them — keep the
+   * budgets row in sync so every consumer (insights, debt planner) sees the total.
+   */
+  const syncBudgetTotal = (categoryId: number): void => {
+    if (itemCount(categoryId) === 0) return;
+    const sum = (db
+      .prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM budget_items WHERE category_id = ?")
+      .get(categoryId) as { s: number }).s;
+    db.prepare(
+      `INSERT INTO budgets (category_id, monthly_cents) VALUES (?, ?)
+       ON CONFLICT(category_id) DO UPDATE SET monthly_cents = excluded.monthly_cents`
+    ).run(categoryId, sum);
+  };
+
   app.get("/api/budgets", async () => {
-    return db
+    const rows = db
       .prepare(
         `SELECT b.category_id, b.monthly_cents, c.name, c.grp, c.icon
          FROM budgets b JOIN categories c ON c.id = b.category_id ORDER BY b.monthly_cents DESC`
       )
-      .all();
+      .all() as Array<{ category_id: number; monthly_cents: number; name: string; grp: string; icon: string }>;
+    const items = db
+      .prepare(
+        `SELECT id, category_id, name, amount_cents FROM budget_items ORDER BY sort, id`
+      )
+      .all() as Array<{ id: number; category_id: number; name: string; amount_cents: number }>;
+    const byCat = new Map<number, Array<{ id: number; name: string; amount_cents: number }>>();
+    for (const it of items) {
+      if (!byCat.has(it.category_id)) byCat.set(it.category_id, []);
+      byCat.get(it.category_id)!.push({ id: it.id, name: it.name, amount_cents: it.amount_cents });
+    }
+    return rows.map((r) => ({ ...r, items: byCat.get(r.category_id) ?? [] }));
   });
 
   // A budget of $0 is a real, meaningful budget ("spend nothing here") — it is
   // stored, not treated as "no budget". Removing a budget entirely is a separate
-  // DELETE below.
+  // DELETE below. Categories with line items have their total driven by the items,
+  // so a flat set is ignored for those (the items win).
   app.put("/api/budgets", async (req, reply) => {
     const b = req.body as { items?: Array<{ category_id: number; monthly_cents: number }> };
     if (!Array.isArray(b?.items)) return reply.code(400).send({ error: "items array is required." });
@@ -346,6 +380,7 @@ export function registerCoreRoutes(app: FastifyInstance): void {
     const run = db.transaction(() => {
       for (const item of b.items!) {
         if (!Number.isFinite(item.category_id) || !Number.isFinite(item.monthly_cents)) continue;
+        if (itemCount(item.category_id) > 0) continue; // line items are the source of truth
         upsert.run(item.category_id, Math.max(0, Math.round(item.monthly_cents)));
       }
     });
@@ -355,8 +390,76 @@ export function registerCoreRoutes(app: FastifyInstance): void {
 
   app.delete("/api/budgets/:categoryId", async (req, reply) => {
     const id = Number((req.params as { categoryId: string }).categoryId);
-    const info = db.prepare("DELETE FROM budgets WHERE category_id = ?").run(id);
+    const run = db.transaction(() => {
+      db.prepare("DELETE FROM budget_items WHERE category_id = ?").run(id);
+      return db.prepare("DELETE FROM budgets WHERE category_id = ?").run(id);
+    });
+    const info = run();
     if (info.changes === 0) return reply.code(404).send({ error: "No budget for that category." });
+    return { ok: true };
+  });
+
+  // ----- Budget line items (folders under a category) -----
+  app.post("/api/budgets/items", async (req, reply) => {
+    const b = req.body as { category_id?: number; name?: string; amount_cents?: number };
+    const catId = Number(b?.category_id);
+    if (!Number.isInteger(catId)) return reply.code(400).send({ error: "category_id is required." });
+    const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(catId);
+    if (!cat) return reply.code(404).send({ error: "No such category." });
+    const cents = Math.max(0, Math.round(Number(b?.amount_cents ?? 0)));
+    const nextSort =
+      (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM budget_items WHERE category_id = ?").get(catId) as {
+        s: number;
+      }).s;
+    const run = db.transaction(() => {
+      const info = db
+        .prepare("INSERT INTO budget_items (category_id, name, amount_cents, sort) VALUES (?, ?, ?, ?)")
+        .run(catId, (b?.name ?? "").trim(), Number.isFinite(cents) ? cents : 0, nextSort);
+      // Ensure a budgets row exists so the category shows up, then sync the total.
+      db.prepare(
+        "INSERT INTO budgets (category_id, monthly_cents) VALUES (?, 0) ON CONFLICT(category_id) DO NOTHING"
+      ).run(catId);
+      syncBudgetTotal(catId);
+      return info;
+    });
+    const info = run();
+    return { ok: true, id: Number(info.lastInsertRowid) };
+  });
+
+  app.patch("/api/budgets/items/:id", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const row = db.prepare("SELECT category_id FROM budget_items WHERE id = ?").get(id) as
+      | { category_id: number }
+      | undefined;
+    if (!row) return reply.code(404).send({ error: "No such budget item." });
+    const b = req.body as { name?: string; amount_cents?: number };
+    const run = db.transaction(() => {
+      if (typeof b?.name === "string") {
+        db.prepare("UPDATE budget_items SET name = ? WHERE id = ?").run(b.name.trim(), id);
+      }
+      if (b?.amount_cents !== undefined && Number.isFinite(Number(b.amount_cents))) {
+        db.prepare("UPDATE budget_items SET amount_cents = ? WHERE id = ?").run(
+          Math.max(0, Math.round(Number(b.amount_cents))),
+          id
+        );
+      }
+      syncBudgetTotal(row.category_id);
+    });
+    run();
+    return { ok: true };
+  });
+
+  app.delete("/api/budgets/items/:id", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const row = db.prepare("SELECT category_id FROM budget_items WHERE id = ?").get(id) as
+      | { category_id: number }
+      | undefined;
+    if (!row) return reply.code(404).send({ error: "No such budget item." });
+    const run = db.transaction(() => {
+      db.prepare("DELETE FROM budget_items WHERE id = ?").run(id);
+      syncBudgetTotal(row.category_id); // no-op once the last item is gone; total stays as last sum
+    });
+    run();
     return { ok: true };
   });
 

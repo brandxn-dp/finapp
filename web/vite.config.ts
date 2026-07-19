@@ -24,8 +24,8 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // Precache the bundled serif fonts so the installed app looks right offline
-        globPatterns: ["**/*.{js,css,html,woff2,png}"],
+        // Precache the bundled fonts + aero backdrop so the installed app looks right offline
+        globPatterns: ["**/*.{js,css,html,woff2,png,svg}"],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         // Never cache API responses beyond the session — financial data must stay fresh
         navigateFallbackDenylist: [/^\/api\//],

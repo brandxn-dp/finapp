@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Papa from "papaparse";
 import { api, useApi } from "../lib/api";
@@ -7,6 +7,29 @@ import { money, monthName, shortDate } from "../lib/format";
 import { Button, Card, Empty, Icon, Input, Modal, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 const PAGE = 100;
+
+// Resizable transaction table columns — widths persist so the layout you tune sticks.
+type ColId = "date" | "payee" | "account" | "category" | "amount";
+const COL_DEFAULTS: Record<ColId, number> = { date: 88, payee: 260, account: 140, category: 210, amount: 128 };
+const COL_MIN: Record<ColId, number> = { date: 64, payee: 120, account: 80, category: 130, amount: 90 };
+const COL_ORDER: ColId[] = ["date", "payee", "account", "category", "amount"];
+const COL_LABEL: Record<ColId, string> = { date: "Date", payee: "Payee", account: "Account", category: "Category", amount: "Amount" };
+
+function useColumnWidths() {
+  const [widths, setWidths] = useState<Record<ColId, number>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("finapp-txn-cols") || "{}");
+      return { ...COL_DEFAULTS, ...saved };
+    } catch {
+      return { ...COL_DEFAULTS };
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem("finapp-txn-cols", JSON.stringify(widths));
+  }, [widths]);
+  const reset = () => setWidths({ ...COL_DEFAULTS });
+  return { widths, setWidths, reset };
+}
 
 export default function Transactions() {
   const [params, setParams] = useSearchParams();
@@ -17,7 +40,10 @@ export default function Transactions() {
   // Month/category can arrive via URL (e.g. clicking a category on the Dashboard)
   const [month, setMonth] = useState(() => params.get("month") ?? "");
   const [accountId, setAccountId] = useState("");
-  const [categoryId, setCategoryId] = useState(() => params.get("category_id") ?? "");
+  const [categoryIds, setCategoryIds] = useState<string[]>(() => {
+    const c = params.get("category_id");
+    return c ? [c] : [];
+  });
   const [categoryMode, setCategoryMode] = useState<"include" | "exclude">("include");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -28,6 +54,10 @@ export default function Transactions() {
   const [sort, setSort] = useState<"date" | "amount" | "payee">("date");
   const [dir, setDir] = useState<"desc" | "asc">("desc");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersCollapsed, setFiltersCollapsed] = useState(
+    () => localStorage.getItem("finapp-filters-collapsed") === "1"
+  );
+  const { widths, setWidths, reset: resetCols } = useColumnWidths();
   const [bulkCat, setBulkCat] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [limit, setLimit] = useState(PAGE);
@@ -49,7 +79,8 @@ export default function Transactions() {
   if (debouncedQ) query.set("q", debouncedQ);
   if (month) query.set("month", month);
   if (accountId) query.set("account_id", accountId);
-  if (categoryId) query.set(categoryMode === "exclude" ? "exclude_category_ids" : "category_id", categoryId);
+  if (categoryIds.length)
+    query.set(categoryMode === "exclude" ? "exclude_category_ids" : "category_ids", categoryIds.join(","));
   if (uncategorized) query.set("uncategorized", "1");
   if (source) query.set("source", source);
   if (flow) query.set("flow", flow);
@@ -64,7 +95,7 @@ export default function Transactions() {
 
   const activeFilters =
     (accountId ? 1 : 0) +
-    (categoryId ? 1 : 0) +
+    (categoryIds.length ? 1 : 0) +
     (month ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
     (minAmt || maxAmt ? 1 : 0) +
@@ -75,7 +106,7 @@ export default function Transactions() {
   const clearFilters = () => {
     setMonth("");
     setAccountId("");
-    setCategoryId("");
+    setCategoryIds([]);
     setCategoryMode("include");
     setDateFrom("");
     setDateTo("");
@@ -94,8 +125,15 @@ export default function Transactions() {
   // Selection only makes sense within the current result set
   useEffect(
     () => setSelected(new Set()),
-    [debouncedQ, month, accountId, categoryId, categoryMode, source, flow, dateFrom, dateTo, minAmt, maxAmt, uncategorized]
+    [debouncedQ, month, accountId, categoryIds.join(","), categoryMode, source, flow, dateFrom, dateTo, minAmt, maxAmt, uncategorized]
   );
+
+  const toggleFiltersCollapsed = () => {
+    setFiltersCollapsed((v) => {
+      localStorage.setItem("finapp-filters-collapsed", v ? "0" : "1");
+      return !v;
+    });
+  };
 
   const bulkCategorize = async (catId: string) => {
     if (selected.size === 0) return;
@@ -170,6 +208,36 @@ export default function Transactions() {
     }
   };
 
+  // Drag-to-resize table columns
+  const dragRef = useRef<{ col: ColId; startX: number; startW: number } | null>(null);
+  const startResize = (col: ColId, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { col, startX: e.clientX, startW: widths[col] };
+    const onMove = (ev: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const next = Math.max(COL_MIN[d.col], d.startW + (ev.clientX - d.startX));
+      setWidths((w) => ({ ...w, [d.col]: next }));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.userSelect = "none";
+  };
+  const tableWidth = 44 + COL_ORDER.reduce((s, c) => s + widths[c], 0);
+
+  // Sum of the currently-selected (loaded) rows, for the "select several → total" readout.
+  const selectedSum = useMemo(() => {
+    if (!page || selected.size === 0) return 0;
+    return page.rows.filter((t) => selected.has(t.id)).reduce((s, t) => s + t.amount_cents, 0);
+  }, [page, selected]);
+
   const setCategory = async (txn: Txn, catId: string) => {
     try {
       await api.patch(`/api/transactions/${txn.id}`, {
@@ -221,16 +289,32 @@ export default function Transactions() {
         <DuplicatesView categories={categories ?? []} onChanged={refetch} />
       ) : (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-          <FilterSidebar
-            open={filtersOpen}
-            onClose={() => setFiltersOpen(false)}
-            onClear={clearFilters}
-            activeFilters={activeFilters}
-            accounts={accounts ?? []}
-            categories={categories ?? []}
-            months={months}
-            state={{ q, setQ, month, setMonth, accountId, setAccountId, categoryId, setCategoryId, categoryMode, setCategoryMode, dateFrom, setDateFrom, dateTo, setDateTo, minAmt, setMinAmt, maxAmt, setMaxAmt, source, setSource, flow, setFlow, sort, setSort, dir, setDir, uncategorized, setUncategorized: (v: boolean) => { const next = new URLSearchParams(params); if (v) next.set("uncategorized", "1"); else next.delete("uncategorized"); setParams(next, { replace: true }); }, resetLimit: () => setLimit(PAGE) }}
-          />
+          {filtersCollapsed ? (
+            <aside className="hidden shrink-0 lg:block">
+              <button
+                onClick={toggleFiltersCollapsed}
+                className="card-skeu flex flex-col items-center gap-2 rounded-[14px] border border-line bg-[var(--glass)] px-2 py-3 text-ink3 backdrop-blur-md hover:text-ink"
+                title="Show filters"
+              >
+                <Icon name="sliders" size={16} />
+                {activeFilters > 0 && (
+                  <span className="rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-fg">{activeFilters}</span>
+                )}
+              </button>
+            </aside>
+          ) : (
+            <FilterSidebar
+              open={filtersOpen}
+              onClose={() => setFiltersOpen(false)}
+              onClear={clearFilters}
+              onCollapse={toggleFiltersCollapsed}
+              activeFilters={activeFilters}
+              accounts={accounts ?? []}
+              categories={categories ?? []}
+              months={months}
+              state={{ q, setQ, month, setMonth, accountId, setAccountId, categoryIds, setCategoryIds, categoryMode, setCategoryMode, dateFrom, setDateFrom, dateTo, setDateTo, minAmt, setMinAmt, maxAmt, setMaxAmt, source, setSource, flow, setFlow, sort, setSort, dir, setDir, uncategorized, setUncategorized: (v: boolean) => { const next = new URLSearchParams(params); if (v) next.set("uncategorized", "1"); else next.delete("uncategorized"); setParams(next, { replace: true }); }, resetLimit: () => setLimit(PAGE) }}
+            />
+          )}
 
           <div className="min-w-0 flex-1 space-y-3">
             {/* Toolbar: mobile filter button, count, bulk actions */}
@@ -241,6 +325,14 @@ export default function Transactions() {
               <span className="text-xs text-ink3">
                 {page ? `${page.total} result${page.total === 1 ? "" : "s"}` : "…"}
               </span>
+              {selected.size > 0 && (
+                <span className="tnum rounded-full bg-accent-soft px-2.5 py-1 text-xs font-medium text-ink">
+                  {selected.size} selected · sum{" "}
+                  <span className={selectedSum > 0 ? "text-good" : "text-ink"}>
+                    {selectedSum > 0 ? "+" : ""}{money(selectedSum)}
+                  </span>
+                </span>
+              )}
               {selected.size > 0 && (
                 <div className="ml-auto flex items-center gap-2">
                   <Select
@@ -273,10 +365,16 @@ export default function Transactions() {
                     sub={activeFilters > 0 ? "No transactions match these filters — try clearing some." : "Import a CSV or connect SimpleFIN in Settings to pull transactions automatically."}
                   />
                 ) : (
-                  <table className="w-full min-w-[640px] text-sm">
+                  <table className="table-fixed text-sm" style={{ width: tableWidth }}>
+              <colgroup>
+                <col style={{ width: 44 }} />
+                {COL_ORDER.map((c) => (
+                  <col key={c} style={{ width: widths[c] }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr className="border-b border-line text-left text-xs uppercase tracking-wider text-ink3">
-                  <th className="w-10 px-4 py-3">
+                  <th className="px-4 py-3">
                     <input
                       type="checkbox"
                       title="Select all loaded"
@@ -287,11 +385,23 @@ export default function Transactions() {
                       className="h-4 w-4 accent-[var(--accent)]"
                     />
                   </th>
-                  <th className="px-2 py-3 font-medium">Date</th>
-                  <th className="px-3 py-3 font-medium">Payee</th>
-                  <th className="px-3 py-3 font-medium">Account</th>
-                  <th className="px-3 py-3 font-medium">Category</th>
-                  <th className="px-5 py-3 text-right font-medium">Amount</th>
+                  {COL_ORDER.map((c) => (
+                    <th
+                      key={c}
+                      className={`group relative select-none px-3 py-3 font-medium ${c === "amount" ? "text-right" : ""}`}
+                    >
+                      {COL_LABEL[c]}
+                      <span
+                        onMouseDown={(e) => startResize(c, e)}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={resetCols}
+                        title="Drag to resize · double-click to reset"
+                        className="absolute right-0 top-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                      >
+                        <span className="h-4 w-px bg-line group-hover:bg-accent" />
+                      </span>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -310,20 +420,20 @@ export default function Transactions() {
                         className="h-4 w-4 accent-[var(--accent)]"
                       />
                     </td>
-                    <td className="tnum whitespace-nowrap px-2 py-2.5 text-ink2">{shortDate(t.date)}</td>
-                    <td className="max-w-[260px] px-3 py-2.5">
+                    <td className="tnum truncate px-3 py-2.5 text-ink2">{shortDate(t.date)}</td>
+                    <td className="px-3 py-2.5">
                       <div className="truncate text-ink">{t.payee || "(no payee)"}</div>
                       {t.memo && t.memo !== t.payee && (
                         <div className="truncate text-xs text-ink3">{t.memo}</div>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-ink3">{t.account_name}</td>
+                    <td className="truncate px-3 py-2.5 text-xs text-ink3">{t.account_name}</td>
                     <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1.5">
                         <Select
                           value={t.category_id ?? ""}
                           onChange={(e) => setCategory(t, e.target.value)}
-                          className={`!h-7 max-w-[180px] !text-xs ${t.category_id ? "" : "!text-warn"}`}
+                          className={`!h-7 min-w-0 flex-1 !text-xs ${t.category_id ? "" : "!text-warn"}`}
                         >
                           <option value="">— uncategorized —</option>
                           {categories?.map((c) => (
@@ -331,11 +441,11 @@ export default function Transactions() {
                           ))}
                         </Select>
                         {t.categorized_by === "ai" && (
-                          <span title="Categorized by Claude" className="text-accent"><Icon name="sparkle" size={12} /></span>
+                          <span title="Categorized by Claude" className="shrink-0 text-accent"><Icon name="sparkle" size={12} /></span>
                         )}
                       </div>
                     </td>
-                    <td className={`tnum whitespace-nowrap px-5 py-2.5 text-right font-medium ${t.amount_cents > 0 ? "text-good" : "text-ink"}`}>
+                    <td className={`tnum truncate px-3 py-2.5 text-right font-medium ${t.amount_cents > 0 ? "text-good" : "text-ink"}`}>
                       {t.amount_cents > 0 ? "+" : ""}{money(t.amount_cents)}
                     </td>
                   </tr>
@@ -393,8 +503,8 @@ interface FilterState {
   setMonth: (v: string) => void;
   accountId: string;
   setAccountId: (v: string) => void;
-  categoryId: string;
-  setCategoryId: (v: string) => void;
+  categoryIds: string[];
+  setCategoryIds: (v: string[]) => void;
   categoryMode: "include" | "exclude";
   setCategoryMode: (v: "include" | "exclude") => void;
   dateFrom: string;
@@ -422,6 +532,7 @@ function FilterSidebar({
   open,
   onClose,
   onClear,
+  onCollapse,
   activeFilters,
   accounts,
   categories,
@@ -431,6 +542,7 @@ function FilterSidebar({
   open: boolean;
   onClose: () => void;
   onClear: () => void;
+  onCollapse?: () => void;
   activeFilters: number;
   accounts: Account[];
   categories: Category[];
@@ -482,18 +594,43 @@ function FilterSidebar({
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-[11px] font-medium uppercase tracking-wider text-ink3">Category</span>
-          <div className="flex gap-1 rounded-md bg-surface2 p-0.5 text-[11px]">
-            <button className={`rounded px-1.5 ${s.categoryMode === "include" ? "bg-accent text-accent-fg" : "text-ink2"}`} onClick={() => { s.setCategoryMode("include"); reset(); }}>Only</button>
-            <button className={`rounded px-1.5 ${s.categoryMode === "exclude" ? "bg-accent text-accent-fg" : "text-ink2"}`} onClick={() => { s.setCategoryMode("exclude"); reset(); }}>Exclude</button>
+          <span className="text-[11px] font-medium uppercase tracking-wider text-ink3">
+            Category{s.categoryIds.length > 0 ? ` (${s.categoryIds.length})` : ""}
+          </span>
+          <div className="flex items-center gap-2">
+            {s.categoryIds.length > 0 && (
+              <button className="text-[11px] text-ink3 hover:text-ink" onClick={() => { s.setCategoryIds([]); reset(); }}>Clear</button>
+            )}
+            <div className="flex gap-1 rounded-md bg-surface2 p-0.5 text-[11px]">
+              <button className={`rounded px-1.5 ${s.categoryMode === "include" ? "bg-accent text-accent-fg" : "text-ink2"}`} onClick={() => { s.setCategoryMode("include"); reset(); }}>Only</button>
+              <button className={`rounded px-1.5 ${s.categoryMode === "exclude" ? "bg-accent text-accent-fg" : "text-ink2"}`} onClick={() => { s.setCategoryMode("exclude"); reset(); }}>Exclude</button>
+            </div>
           </div>
         </div>
-        <Select value={s.categoryId} onChange={(e) => { s.setCategoryId(e.target.value); reset(); }} className="w-full">
-          <option value="">All categories</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
-          ))}
-        </Select>
+        <div className="field-skeu max-h-44 overflow-y-auto rounded-lg border border-line bg-surface p-1">
+          {categories.length === 0 ? (
+            <div className="px-2 py-1.5 text-xs text-ink3">No categories yet</div>
+          ) : (
+            categories.map((c) => {
+              const id = String(c.id);
+              const on = s.categoryIds.includes(id);
+              return (
+                <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm text-ink hover:bg-surface2">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => {
+                      s.setCategoryIds(on ? s.categoryIds.filter((x) => x !== id) : [...s.categoryIds, id]);
+                      reset();
+                    }}
+                    className="h-3.5 w-3.5 accent-[var(--accent)]"
+                  />
+                  <span className="truncate">{c.icon} {c.name}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
       </div>
 
       <div>
@@ -507,10 +644,11 @@ function FilterSidebar({
 
       <div>
         <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-ink3">Date range</span>
-        <div className="flex items-center gap-1.5">
-          <Input type="date" value={s.dateFrom} onChange={(e) => { s.setDateFrom(e.target.value); reset(); }} className="w-full !px-2 !text-xs" />
-          <span className="text-ink3">–</span>
-          <Input type="date" value={s.dateTo} onChange={(e) => { s.setDateTo(e.target.value); reset(); }} className="w-full !px-2 !text-xs" />
+        <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
+          <span className="text-[11px] text-ink3">From</span>
+          <Input type="date" value={s.dateFrom} onChange={(e) => { s.setDateFrom(e.target.value); reset(); }} className="w-full min-w-0 !px-2 !text-xs" />
+          <span className="text-[11px] text-ink3">To</span>
+          <Input type="date" value={s.dateTo} onChange={(e) => { s.setDateTo(e.target.value); reset(); }} className="w-full min-w-0 !px-2 !text-xs" />
         </div>
         {months.length > 0 && (
           <Select value={s.month} onChange={(e) => { s.setMonth(e.target.value); reset(); }} className="mt-1.5 w-full !text-xs">
@@ -563,7 +701,22 @@ function FilterSidebar({
     <>
       {/* Desktop: sticky sidebar */}
       <aside className="hidden w-60 shrink-0 lg:block">
-        <Card title="Filter & sort">{body}</Card>
+        <Card
+          title="Filter & sort"
+          action={
+            onCollapse && (
+              <button
+                onClick={onCollapse}
+                className="rounded-md px-1.5 py-0.5 text-lg leading-none text-ink3 hover:bg-surface2 hover:text-ink"
+                title="Collapse filters"
+              >
+                «
+              </button>
+            )
+          }
+        >
+          {body}
+        </Card>
       </aside>
 
       {/* Mobile: slide-over */}

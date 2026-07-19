@@ -131,7 +131,7 @@ export function Flourish({ className = "" }: { className?: string }) {
       stroke="currentColor"
       strokeWidth="1"
       strokeLinecap="round"
-      className={className}
+      className={`flourish-deco ${className}`}
       aria-hidden="true"
     >
       <path d="M4 7 C 22 1.5, 40 12, 58 7 C 62 5.8, 66 5.8, 69 7" />
@@ -155,7 +155,7 @@ export function PageHeader({
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="font-display text-[27px] font-semibold leading-tight tracking-wide text-ink">{title}</h1>
+        <h1 className="page-title font-display text-[27px] font-semibold leading-tight tracking-wide text-ink">{title}</h1>
         {sub && <p className="mt-0.5 text-sm text-ink2">{sub}</p>}
         <Flourish className="mt-1.5 text-accent/60" />
       </div>
@@ -269,9 +269,9 @@ export function Button({ variant = "primary", size = "md", className = "", ...re
   const sizes = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
   const variants = {
     primary: "btn-emboss bg-accent text-accent-fg hover:brightness-108 active:translate-y-px",
-    ghost: "border border-line bg-transparent text-ink hover:bg-surface2",
-    subtle: "bg-surface2 text-ink hover:brightness-95 dark:hover:brightness-125",
-    danger: "border border-line text-bad hover:bg-bad/10"
+    ghost: "btn-ghost border border-line bg-transparent text-ink hover:bg-surface2",
+    subtle: "btn-subtle bg-surface2 text-ink hover:brightness-95 dark:hover:brightness-125",
+    danger: "btn-danger border border-line text-bad hover:bg-bad/10"
   } as const;
   return <button className={`${base} ${sizes} ${variants[variant]} ${className}`} {...rest} />;
 }
@@ -313,9 +313,9 @@ export function Modal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[8vh] backdrop-blur-[5px]" onMouseDown={onClose}>
+    <div className="modal-overlay fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[8vh] backdrop-blur-[5px]" onMouseDown={onClose}>
       <div
-        className={`w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-[14px] border border-line bg-[var(--glass)] shadow-2xl outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-2xl`}
+        className={`card-skeu w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-[14px] border border-line bg-[var(--glass)] shadow-2xl outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-2xl`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
@@ -377,7 +377,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto rounded-lg border border-line bg-surface px-4 py-2.5 text-sm shadow-lg ${
+            className={`pointer-events-auto rounded-lg border border-line bg-surface px-4 py-2.5 text-sm shadow-lg backdrop-blur-md ${
               t.tone === "good" ? "text-good" : t.tone === "bad" ? "text-bad" : "text-ink"
             }`}
           >

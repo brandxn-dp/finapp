@@ -17,7 +17,7 @@ import { ChartTooltip, LegendRow } from "../components/charts";
 
 export default function Debts() {
   const { data: debts, refetch } = useApi<Debt[]>("/api/debts");
-  const { data: plan } = useApi<PayoffPlan>("/api/debts/plan");
+  const { data: plan, refetch: refetchPlan } = useApi<PayoffPlan>("/api/debts/plan");
   const [extraIncome, setExtraIncome] = useState("");
   /** category_id -> cut percentage (0–100) of that category's basis amount */
   const [cuts, setCuts] = useState<Map<number, number>>(new Map());
@@ -39,11 +39,19 @@ export default function Debts() {
   const spendingCents = budgetMode ? (plan?.total_budget_cents ?? 0) : (plan?.avg_spending_cents ?? 0);
   const leftoverCents = (plan?.avg_income_cents ?? 0) - spendingCents;
 
-  // Only budgeted categories are meaningful cuts in budget mode
-  const shownCuts = useMemo(
-    () => (plan?.cut_candidates ?? []).filter((c) => (budgetMode ? c.budget_cents > 0 : true)),
-    [plan, budgetMode]
-  );
+  // In budget mode every candidate is shown — budgets are editable right in
+  // the list, so an unbudgeted category is one you can set a number on.
+  const shownCuts = useMemo(() => plan?.cut_candidates ?? [], [plan]);
+
+  /** Change a category's budget from the planner; the whole plan recomputes. */
+  const editBudget = async (categoryId: number, cents: number) => {
+    try {
+      await api.put("/api/budgets", { items: [{ category_id: categoryId, monthly_cents: cents }] });
+      refetchPlan();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
 
   // Money freed by trimming categories
   const cutSavingsCents = useMemo(
@@ -146,6 +154,7 @@ export default function Debts() {
             setCutBasis={setCutBasis}
             basisCents={basisCents}
             shownCuts={shownCuts}
+            onBudgetEdit={editBudget}
             spendingCents={spendingCents}
             leftoverCents={leftoverCents}
             cutSavingsCents={cutSavingsCents}
@@ -216,6 +225,56 @@ export default function Debts() {
 
 // ---------------- The plan: where the extra money comes from ----------------
 
+/** Inline editable "$X/mo budgeted" — click, type a number, Enter/blur saves. */
+function BudgetAmountEditor({ cents, onSave }: { cents: number; onSave: (cents: number) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+
+  const commit = () => {
+    setEditing(false);
+    const n = Number(val);
+    if (val.trim() === "" || !Number.isFinite(n) || n < 0) return;
+    const next = Math.round(n * 100);
+    if (next !== cents) onSave(next);
+  };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setVal(cents > 0 ? (cents / 100).toFixed(cents % 100 === 0 ? 0 : 2) : "");
+          setEditing(true);
+        }}
+        className="shrink-0 rounded border-b border-dashed border-ink3/50 text-xs text-ink3 hover:text-accent"
+        title="Change this category's budget"
+      >
+        {cents > 0 ? `${money(cents)}/mo budgeted` : "set budget…"}
+      </button>
+    );
+  }
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 text-xs text-ink3">
+      $
+      <input
+        autoFocus
+        type="number"
+        min={0}
+        step="1"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        className="field-skeu tnum w-20 rounded border border-line bg-surface px-1.5 py-0.5 text-xs text-ink outline-none focus:border-accent"
+      />
+      /mo
+    </span>
+  );
+}
+
 function PlanCard({
   plan,
   extraIncome,
@@ -226,6 +285,7 @@ function PlanCard({
   setCutBasis,
   basisCents,
   shownCuts,
+  onBudgetEdit,
   spendingCents,
   leftoverCents,
   cutSavingsCents,
@@ -242,6 +302,7 @@ function PlanCard({
   setCutBasis: (b: "realistic" | "budget") => void;
   basisCents: (c: { avg_monthly_cents: number; budget_cents: number }) => number;
   shownCuts: PayoffPlan["cut_candidates"];
+  onBudgetEdit: (categoryId: number, cents: number) => void;
   spendingCents: number;
   leftoverCents: number;
   cutSavingsCents: number;
@@ -349,14 +410,19 @@ function PlanCard({
                     }`}
                   >
                     <div className="flex items-baseline justify-between gap-2 text-sm">
-                      <span className="min-w-0 truncate text-ink">
+                      <span className="flex min-w-0 items-baseline gap-1.5 truncate text-ink">
                         {c.icon} {c.name}
-                        <span className="ml-1.5 text-xs text-ink3">
-                          {money(base)}/mo {usingBudget ? "budgeted" : "now"}
-                        </span>
+                        {usingBudget ? (
+                          <BudgetAmountEditor
+                            cents={c.budget_cents}
+                            onSave={(v) => onBudgetEdit(c.category_id, v)}
+                          />
+                        ) : (
+                          <span className="text-xs text-ink3">{money(base)}/mo now</span>
+                        )}
                       </span>
                       <span className={`tnum shrink-0 text-xs font-medium ${pct > 0 ? "text-accent" : "text-ink3"}`}>
-                        {pct > 0 ? `−${pct}% → +${money(cents)}/mo` : "keep as is"}
+                        {pct > 0 ? `−${pct}% → +${money(cents)}/mo` : usingBudget && base === 0 ? "no budget set" : "keep as is"}
                       </span>
                     </div>
                     <input

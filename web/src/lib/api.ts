@@ -184,12 +184,19 @@ export interface BudgetSuggestion {
   current_budget_cents: number | null;
 }
 
+export interface BudgetItem {
+  id: number;
+  name: string;
+  amount_cents: number;
+}
+
 export interface BudgetRow {
   category_id: number;
   monthly_cents: number;
   name: string;
   grp: string;
   icon: string;
+  items: BudgetItem[];
 }
 
 export interface Debt {

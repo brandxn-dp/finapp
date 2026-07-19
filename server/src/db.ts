@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS budgets (
   monthly_cents INTEGER NOT NULL
 );
 
+-- Optional named line items under a budget category ("Transportation" folder →
+-- "Car payment" $500 + "Gas" $100). When a category has any line items, its
+-- budget total is kept in sync as the sum of them.
+CREATE TABLE IF NOT EXISTS budget_items (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  category_id  INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL DEFAULT '',
+  amount_cents INTEGER NOT NULL DEFAULT 0,
+  sort         INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_budget_items_cat ON budget_items(category_id);
+
 CREATE TABLE IF NOT EXISTS recurring_overrides (
   payee_norm TEXT PRIMARY KEY,
   status     TEXT NOT NULL DEFAULT 'ignored',  -- 'ignored' = user says this is not a real bill/subscription
@@ -200,6 +213,7 @@ export function factoryReset(): void {
     "deleted_txns",
     "deleted_accounts",
     "merchant_cache",
+    "budget_items",
     "budgets",
     "rules",
     "recurring_overrides",

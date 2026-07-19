@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1200" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e6fc9"/>
+      <stop offset="0.34" stop-color="#3fa9e8"/>
+      <stop offset="0.56" stop-color="#8fd4f6"/>
+      <stop offset="0.72" stop-color="#d3f0fc"/>
+      <stop offset="1" stop-color="#eefaff"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#e8fbff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hillFar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b8e35f"/>
+      <stop offset="0.5" stop-color="#7cc93e"/>
+      <stop offset="1" stop-color="#4ba32c"/>
+    </linearGradient>
+    <linearGradient id="hillNear" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8ed24a"/>
+      <stop offset="0.45" stop-color="#4fae2e"/>
+      <stop offset="1" stop-color="#237a1e"/>
+    </linearGradient>
+    <linearGradient id="hillGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="bubble" cx="0.32" cy="0.28" r="0.78">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="0.22" stop-color="#ffffff" stop-opacity="0.2"/>
+      <stop offset="0.8" stop-color="#bfeaff" stop-opacity="0.1"/>
+      <stop offset="0.96" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.1"/>
+    </radialGradient>
+    <linearGradient id="streak" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- sky -->
+  <rect width="1920" height="1200" fill="url(#sky)"/>
+  <!-- sun glare -->
+  <circle cx="330" cy="210" r="430" fill="url(#sun)"/>
+  <circle cx="330" cy="210" r="150" fill="url(#sun)"/>
+
+  <!-- aurora swooshes -->
+  <path d="M0 430 C 480 300 980 520 1920 310 L1920 0 L0 0 Z" fill="#ffffff" opacity="0.09"/>
+  <path d="M0 540 C 600 400 1150 630 1920 440 L1920 360 C 1150 560 600 330 0 470 Z" fill="#ffffff" opacity="0.13"/>
+  <path d="M0 640 C 700 520 1300 720 1920 560 L1920 520 C 1300 690 700 480 0 600 Z" fill="#ffffff" opacity="0.1"/>
+
+  <!-- light streaks -->
+  <rect x="180" y="120" width="700" height="7" rx="3.5" transform="rotate(-14 530 123)" fill="url(#streak)" opacity="0.5"/>
+  <rect x="900" y="260" width="560" height="5" rx="2.5" transform="rotate(-10 1180 262)" fill="url(#streak)" opacity="0.4"/>
+
+  <!-- far hill -->
+  <path d="M0 905 C 340 760 620 785 900 860 C 1200 940 1480 870 1920 800 L1920 1200 L0 1200 Z" fill="url(#hillFar)"/>
+  <path d="M0 905 C 340 760 620 785 900 860 C 700 830 340 815 0 940 Z" fill="url(#hillGloss)" opacity="0.5"/>
+  <path d="M1920 800 C 1620 850 1400 900 1160 878 C 1420 920 1680 870 1920 830 Z" fill="url(#hillGloss)" opacity="0.35"/>
+
+  <!-- near hill -->
+  <path d="M0 1030 C 420 930 800 985 1120 1035 C 1400 1078 1660 1030 1920 975 L1920 1200 L0 1200 Z" fill="url(#hillNear)"/>
+  <path d="M0 1030 C 420 930 800 985 1120 1035 C 860 1010 420 965 0 1075 Z" fill="url(#hillGloss)" opacity="0.4"/>
+
+  <!-- bubbles -->
+  <circle cx="1430" cy="270" r="88" fill="url(#bubble)"/>
+  <ellipse cx="1398" cy="238" rx="26" ry="15" transform="rotate(-28 1398 238)" fill="#ffffff" opacity="0.75"/>
+  <circle cx="1610" cy="450" r="120" fill="url(#bubble)"/>
+  <ellipse cx="1566" cy="406" rx="34" ry="19" transform="rotate(-28 1566 406)" fill="#ffffff" opacity="0.7"/>
+  <circle cx="1300" cy="140" r="42" fill="url(#bubble)"/>
+  <ellipse cx="1285" cy="125" rx="13" ry="7" transform="rotate(-28 1285 125)" fill="#ffffff" opacity="0.75"/>
+  <circle cx="1755" cy="240" r="55" fill="url(#bubble)"/>
+  <ellipse cx="1735" cy="220" rx="16" ry="9" transform="rotate(-28 1735 220)" fill="#ffffff" opacity="0.7"/>
+  <circle cx="230" cy="640" r="62" fill="url(#bubble)"/>
+  <ellipse cx="208" cy="617" rx="18" ry="10" transform="rotate(-28 208 617)" fill="#ffffff" opacity="0.7"/>
+  <circle cx="100" cy="500" r="34" fill="url(#bubble)"/>
+  <ellipse cx="88" cy="487" rx="10" ry="6" transform="rotate(-28 88 487)" fill="#ffffff" opacity="0.7"/>
+  <circle cx="840" cy="200" r="28" fill="url(#bubble)"/>
+  <ellipse cx="830" cy="189" rx="8" ry="5" transform="rotate(-28 830 189)" fill="#ffffff" opacity="0.7"/>
+  <circle cx="1060" cy="720" r="46" fill="url(#bubble)"/>
+  <ellipse cx="1044" cy="703" rx="13" ry="8" transform="rotate(-28 1044 703)" fill="#ffffff" opacity="0.65"/>
+</svg>

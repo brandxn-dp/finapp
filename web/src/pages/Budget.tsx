@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, useApi } from "../lib/api";
-import type { BudgetRow, BudgetSuggestion, Category, CategorySpend } from "../lib/api";
+import type { BudgetItem, BudgetRow, BudgetSuggestion, Category, CategorySpend } from "../lib/api";
 import { currentMonth, money, monthNameLong } from "../lib/format";
 import { useChartColors } from "../lib/theme";
 import { Button, Card, Empty, Icon, Input, Modal, PageHeader, Select, Spinner, useToast } from "../components/ui";
@@ -92,6 +92,7 @@ export default function Budget() {
                 spent={spentBy.get(b.category_id) ?? 0}
                 onRemove={() => removeBudget(b.category_id)}
                 onEdit={() => setModal(b)}
+                onChanged={refreshAll}
               />
             ))}
           </ul>
@@ -169,43 +170,82 @@ function BudgetLine({
   row,
   spent,
   onRemove,
-  onEdit
+  onEdit,
+  onChanged
 }: {
   row: BudgetRow;
   spent: number;
   onRemove: () => void;
   onEdit: () => void;
+  onChanged: () => void;
 }) {
   const c = useChartColors();
+  const { toast } = useToast();
+  const hasItems = row.items.length > 0;
+  // Categories broken into items start expanded so the breakdown is visible.
+  const [open, setOpen] = useState(hasItems);
+  const [adding, setAdding] = useState(false);
   // A $0 budget means "spend nothing here" — any spend is over.
   const zero = row.monthly_cents === 0;
   const pct = zero ? (spent > 0 ? 100 : 0) : Math.min(100, (spent / row.monthly_cents) * 100);
   const over = spent > row.monthly_cents;
 
+  const err = (e: unknown) => toast(e instanceof Error ? e.message : String(e), "bad");
+
+  const addItem = async (name: string, cents: number) => {
+    try {
+      await api.post("/api/budgets/items", { category_id: row.category_id, name, amount_cents: cents });
+      setAdding(false);
+      setOpen(true);
+      onChanged();
+    } catch (e) {
+      err(e);
+    }
+  };
+
   return (
     <li>
       <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
-        <span className="truncate text-ink">
+        <span className="flex min-w-0 items-baseline gap-1 truncate text-ink">
+          {hasItems && (
+            <button
+              className={`shrink-0 text-ink3 transition-transform hover:text-ink ${open ? "rotate-180" : ""}`}
+              onClick={() => setOpen((o) => !o)}
+              aria-label={open ? "Collapse items" : "Expand items"}
+            >
+              <Icon name="chevronDown" size={13} />
+            </button>
+          )}
           <Link
             to={`/transactions?category_id=${row.category_id}&month=${currentMonth()}`}
-            className="hover:text-accent hover:underline"
+            className="truncate hover:text-accent hover:underline"
             title="See this month's transactions in this category"
           >
             <span className="mr-1.5">{row.icon}</span>
             {row.name}
           </Link>
-          {zero && <span className="ml-2 text-xs text-ink3">no-spend goal</span>}
+          {hasItems && <span className="shrink-0 text-xs text-ink3">· {row.items.length} items</span>}
+          {zero && !hasItems && <span className="ml-2 text-xs text-ink3">no-spend goal</span>}
           {over && (
-            <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-bad">
+            <span className="ml-2 inline-flex shrink-0 items-center gap-1 text-xs font-medium text-bad">
               <Icon name="alert" size={12} /> over by {money(spent - row.monthly_cents)}
             </span>
           )}
         </span>
-        <span className="tnum shrink-0 text-ink2">
-          {money(spent)} <span className="text-ink3">of</span> {money(row.monthly_cents)}
-          <button className="ml-2 text-ink3 hover:text-ink" title="Edit name, emoji, or amount" onClick={onEdit}>
-            <Icon name="sliders" size={12} />
+        <span className="tnum flex shrink-0 items-center text-ink2">
+          {money(spent)} <span className="mx-1 text-ink3">of</span> {money(row.monthly_cents)}
+          <button
+            className="ml-2 text-ink3 hover:text-accent"
+            title="Add a line item"
+            onClick={() => { setAdding(true); setOpen(true); }}
+          >
+            <Icon name="plus" size={13} />
           </button>
+          {!hasItems && (
+            <button className="ml-1.5 text-ink3 hover:text-ink" title="Edit name, emoji, or amount" onClick={onEdit}>
+              <Icon name="sliders" size={12} />
+            </button>
+          )}
           <button className="ml-1.5 text-ink3 hover:text-bad" title="Remove budget" onClick={onRemove}>
             <Icon name="x" size={12} />
           </button>
@@ -217,7 +257,139 @@ function BudgetLine({
           style={{ width: `${pct}%`, background: over ? "var(--bad)" : c.bar }}
         />
       </div>
+
+      {open && (hasItems || adding) && (
+        <div className="mt-2 space-y-1.5 border-l-2 border-line pl-3">
+          {row.items.map((it) => (
+            <BudgetItemRow key={it.id} item={it} onChanged={onChanged} onError={err} />
+          ))}
+          {adding ? (
+            <AddItemRow onAdd={addItem} onCancel={() => setAdding(false)} />
+          ) : (
+            <button
+              className="flex items-center gap-1 text-xs text-ink3 hover:text-accent"
+              onClick={() => setAdding(true)}
+            >
+              <Icon name="plus" size={12} /> Add item
+            </button>
+          )}
+        </div>
+      )}
     </li>
+  );
+}
+
+/** One editable line item: name + amount save on blur; trash removes it. */
+function BudgetItemRow({
+  item,
+  onChanged,
+  onError
+}: {
+  item: BudgetItem;
+  onChanged: () => void;
+  onError: (e: unknown) => void;
+}) {
+  const [name, setName] = useState(item.name);
+  const [amount, setAmount] = useState((item.amount_cents / 100).toFixed(item.amount_cents % 100 === 0 ? 0 : 2));
+
+  const saveName = async () => {
+    if (name === item.name) return;
+    try {
+      await api.patch(`/api/budgets/items/${item.id}`, { name });
+      onChanged();
+    } catch (e) {
+      onError(e);
+    }
+  };
+  const saveAmount = async () => {
+    const cents = Math.round(Number(amount || 0) * 100);
+    if (!Number.isFinite(cents) || cents === item.amount_cents) return;
+    try {
+      await api.patch(`/api/budgets/items/${item.id}`, { amount_cents: cents });
+      onChanged();
+    } catch (e) {
+      onError(e);
+    }
+  };
+  const remove = async () => {
+    try {
+      await api.del(`/api/budgets/items/${item.id}`);
+      onChanged();
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={saveName}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        placeholder="Item name"
+        className="!h-7 min-w-0 flex-1 !text-xs"
+      />
+      <span className="text-xs text-ink3">$</span>
+      <Input
+        value={amount}
+        onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+        onBlur={saveAmount}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        inputMode="decimal"
+        className="tnum !h-7 w-20 !px-2 !text-xs"
+      />
+      <button className="shrink-0 text-ink3 hover:text-bad" title="Remove item" onClick={remove}>
+        <Icon name="trash" size={13} />
+      </button>
+    </div>
+  );
+}
+
+/** Inline "add item" form under a category folder. */
+function AddItemRow({
+  onAdd,
+  onCancel
+}: {
+  onAdd: (name: string, cents: number) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+
+  const submit = () => {
+    const cents = Math.round(Number(amount || 0) * 100);
+    onAdd(name.trim(), Number.isFinite(cents) ? cents : 0);
+    setName("");
+    setAmount("");
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="e.g. Car payment"
+        className="!h-7 min-w-0 flex-1 !text-xs"
+      />
+      <span className="text-xs text-ink3">$</span>
+      <Input
+        value={amount}
+        onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        inputMode="decimal"
+        placeholder="0"
+        className="tnum !h-7 w-20 !px-2 !text-xs"
+      />
+      <button className="shrink-0 text-good hover:brightness-110" title="Add" onClick={submit}>
+        <Icon name="check" size={14} />
+      </button>
+      <button className="shrink-0 text-ink3 hover:text-ink" title="Cancel" onClick={onCancel}>
+        <Icon name="x" size={14} />
+      </button>
+    </div>
   );
 }
 

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useTheme } from "../lib/theme";
 import { Icon } from "./ui";
@@ -11,30 +12,37 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: "sliders" }
 ];
 
-function Brand() {
+function Brand({ collapsed }: { collapsed: boolean }) {
+  if (collapsed) {
+    return (
+      <div className="px-2 pb-4 pt-6 text-center">
+        <div className="font-display text-[22px] font-bold leading-none text-accent">F</div>
+      </div>
+    );
+  }
   return (
     <div className="px-4 pb-4 pt-6 text-center">
       <div className="font-display text-[24px] font-bold leading-none tracking-wide text-ink">
         Fin<span className="text-accent">App</span>
       </div>
       <div className="smallcaps mt-1 text-[10px] tracking-[0.28em] text-ink3">self·hosted ledger</div>
-      <div className="mt-1.5 select-none text-[13px] leading-none text-ink3/80" aria-hidden="true">
+      <div className="brand-fleuron mt-1.5 select-none text-[13px] leading-none text-ink3/80" aria-hidden="true">
         ❦
       </div>
     </div>
   );
 }
 
-function ThemeToggle() {
+function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   const { theme, toggle } = useTheme();
   return (
     <button
       onClick={toggle}
-      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink2 hover:bg-surface2 hover:text-ink"
-      title="Toggle theme"
+      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink2 hover:bg-surface2 hover:text-ink ${collapsed ? "justify-center" : ""}`}
+      title={theme === "dark" ? "Light mode" : "Dark mode"}
     >
       <Icon name={theme === "dark" ? "sun" : "moon"} size={16} />
-      {theme === "dark" ? "Light mode" : "Dark mode"}
+      {!collapsed && (theme === "dark" ? "Light mode" : "Dark mode")}
     </button>
   );
 }
@@ -65,20 +73,30 @@ function AcanthusCorner() {
 }
 
 export default function Layout() {
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finapp-nav-collapsed") === "1");
+  const toggleCollapsed = () =>
+    setCollapsed((v) => {
+      localStorage.setItem("finapp-nav-collapsed", v ? "0" : "1");
+      return !v;
+    });
+
   return (
     <div className="relative flex h-full">
       <AcanthusCorner />
       {/* Desktop sidebar */}
-      <aside className="z-10 hidden w-56 shrink-0 flex-col border-r border-line bg-[var(--glass)] backdrop-blur-md md:flex">
-        <Brand />
+      <aside
+        className={`app-sidebar z-10 hidden shrink-0 flex-col border-r border-line bg-[var(--glass)] backdrop-blur-md transition-[width] md:flex ${collapsed ? "w-16" : "w-56"}`}
+      >
+        <Brand collapsed={collapsed} />
         <nav className="flex-1 space-y-0.5 px-2">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === "/"}
+              title={collapsed ? item.label : undefined}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${collapsed ? "justify-center" : ""} ${
                   isActive
                     ? "bg-accent/10 font-medium text-accent"
                     : "text-ink2 hover:bg-surface2 hover:text-ink"
@@ -86,12 +104,20 @@ export default function Layout() {
               }
             >
               <Icon name={item.icon} size={16} />
-              {item.label}
+              {!collapsed && item.label}
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-line p-2">
-          <ThemeToggle />
+        <div className="space-y-0.5 border-t border-line p-2">
+          <ThemeToggle collapsed={collapsed} />
+          <button
+            onClick={toggleCollapsed}
+            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink2 hover:bg-surface2 hover:text-ink ${collapsed ? "justify-center" : ""}`}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <span className="text-lg leading-none">{collapsed ? "»" : "«"}</span>
+            {!collapsed && "Collapse"}
+          </button>
         </div>
       </aside>
 
@@ -104,7 +130,7 @@ export default function Layout() {
 
       {/* Mobile bottom nav — roomy touch targets, safe-area aware */}
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-[var(--glass)] backdrop-blur-lg md:hidden"
+        className="app-bottomnav fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-[var(--glass)] backdrop-blur-lg md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {NAV.map((item) => (

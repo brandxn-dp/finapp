@@ -1,5 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import { db, getSetting, setSetting, deleteSetting, factoryReset } from "../db.js";
+import {
+  db,
+  getSetting,
+  setSetting,
+  deleteSetting,
+  getHouseholdSetting,
+  setHouseholdSetting,
+  resetHousehold
+} from "../db.js";
 import { applyRules } from "../services/categorizer.js";
 import { isConnected, lastSync } from "../services/simplefin.js";
 import { resolveLlmConfig } from "../services/llm.js";
@@ -7,33 +15,37 @@ import { inferAccountType, normalizePayee } from "../util.js";
 
 export function registerCoreRoutes(app: FastifyInstance): void {
   // ----- Accounts -----
-  app.get("/api/accounts", async () => {
+  app.get("/api/accounts", async (req) => {
+    const hid = req.householdId!;
     return db
       .prepare(
         `SELECT a.*, (SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.id) AS txn_count
-         FROM accounts a WHERE a.archived = 0 ORDER BY a.name`
+         FROM accounts a WHERE a.archived = 0 AND a.household_id = ${hid} ORDER BY a.name`
       )
       .all();
   });
 
   app.post("/api/accounts", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { name?: string; type?: string; currency?: string; balance_cents?: number };
     if (!b?.name?.trim()) return reply.code(400).send({ error: "Account name is required." });
     const info = db
-      .prepare("INSERT INTO accounts (name, type, currency, balance_cents) VALUES (?, ?, ?, ?)")
+      .prepare("INSERT INTO accounts (name, type, currency, balance_cents, household_id) VALUES (?, ?, ?, ?, ?)")
       .run(
         b.name.trim(),
         b.type ?? "checking",
         b.currency ?? "USD",
-        Number.isFinite(b.balance_cents) ? Math.round(b.balance_cents!) : 0
+        Number.isFinite(b.balance_cents) ? Math.round(b.balance_cents!) : 0,
+        hid
       );
     return db.prepare("SELECT * FROM accounts WHERE id = ?").get(info.lastInsertRowid);
   });
 
   app.patch("/api/accounts/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
     const b = req.body as { name?: string; type?: string; balance_cents?: number; archived?: boolean };
-    const existing = db.prepare("SELECT * FROM accounts WHERE id = ?").get(id);
+    const existing = db.prepare("SELECT * FROM accounts WHERE id = ? AND household_id = ?").get(id, hid);
     if (!existing) return reply.code(404).send({ error: "Account not found." });
     db.prepare(
       `UPDATE accounts SET
@@ -51,8 +63,11 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   /** Re-infer every account's type from its name (user-triggered, idempotent). */
-  app.post("/api/accounts/auto-type", async () => {
-    const accounts = db.prepare("SELECT id, name, type FROM accounts WHERE archived = 0").all() as Array<{
+  app.post("/api/accounts/auto-type", async (req) => {
+    const hid = req.householdId!;
+    const accounts = db
+      .prepare("SELECT id, name, type FROM accounts WHERE archived = 0 AND household_id = ?")
+      .all(hid) as Array<{
       id: number;
       name: string;
       type: string;
@@ -74,8 +89,8 @@ export function registerCoreRoutes(app: FastifyInstance): void {
    * transactions (tagged with the deleted-account ref) so the whole thing can
    * be restored later, then delete it. Returns false if the account is gone.
    */
-  const trashAccount = db.transaction((id: number): boolean => {
-    const account = db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as
+  const trashAccount = db.transaction((id: number, hid: number): boolean => {
+    const account = db.prepare("SELECT * FROM accounts WHERE id = ? AND household_id = ?").get(id, hid) as
       | {
           id: number;
           name: string;
@@ -102,15 +117,15 @@ export function registerCoreRoutes(app: FastifyInstance): void {
 
     const ref = db
       .prepare(
-        `INSERT INTO deleted_accounts (orig_id, name, type, currency, balance_cents, simplefin_id, txn_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO deleted_accounts (orig_id, name, type, currency, balance_cents, simplefin_id, txn_count, household_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(id, account.name, account.type, account.currency, account.balance_cents, account.simplefin_id, txns.length)
+      .run(id, account.name, account.type, account.currency, account.balance_cents, account.simplefin_id, txns.length, hid)
       .lastInsertRowid as number;
 
     const snap = db.prepare(
-      `INSERT INTO deleted_txns (account_id, external_id, import_hash, date, amount_cents, payee, memo, category_id, account_name, deleted_account_ref)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO deleted_txns (account_id, external_id, import_hash, date, amount_cents, payee, memo, category_id, account_name, deleted_account_ref, household_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     for (const t of txns) {
       snap.run(
@@ -123,7 +138,8 @@ export function registerCoreRoutes(app: FastifyInstance): void {
         t.memo,
         t.category_id,
         account.name,
-        ref
+        ref,
+        hid
       );
     }
 
@@ -134,7 +150,7 @@ export function registerCoreRoutes(app: FastifyInstance): void {
 
   app.delete("/api/accounts/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    if (!trashAccount(id)) return reply.code(404).send({ error: "Account not found." });
+    if (!trashAccount(id, req.householdId!)) return reply.code(404).send({ error: "Account not found." });
     return { ok: true };
   });
 
@@ -145,14 +161,15 @@ export function registerCoreRoutes(app: FastifyInstance): void {
    * trash with the source — they're already present in the target.
    */
   app.post("/api/accounts/:id/merge", async (req, reply) => {
+    const hid = req.householdId!;
     const sourceId = Number((req.params as { id: string }).id);
     const into = Number((req.body as { into?: number })?.into);
     if (!Number.isInteger(into)) return reply.code(400).send({ error: "Target account (into) is required." });
     if (into === sourceId) return reply.code(400).send({ error: "Can't merge an account into itself." });
-    const source = db.prepare("SELECT * FROM accounts WHERE id = ?").get(sourceId) as
+    const source = db.prepare("SELECT * FROM accounts WHERE id = ? AND household_id = ?").get(sourceId, hid) as
       | { id: number; balance_cents: number }
       | undefined;
-    const target = db.prepare("SELECT id FROM accounts WHERE id = ?").get(into);
+    const target = db.prepare("SELECT id FROM accounts WHERE id = ? AND household_id = ?").get(into, hid);
     if (!source || !target) return reply.code(404).send({ error: "Account not found." });
 
     const run = db.transaction(() => {
@@ -163,7 +180,7 @@ export function registerCoreRoutes(app: FastifyInstance): void {
         source.balance_cents,
         into
       );
-      trashAccount(sourceId); // snapshots any leftover colliding txns, then removes the source
+      trashAccount(sourceId, hid); // snapshots any leftover colliding txns, then removes the source
       return moved;
     });
     const moved = run();
@@ -171,30 +188,32 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   app.post("/api/accounts/bulk-delete", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { ids?: number[] };
     if (!Array.isArray(b?.ids) || b.ids.length === 0) {
       return reply.code(400).send({ error: "ids array is required." });
     }
     let deleted = 0;
-    for (const id of b.ids) if (Number.isInteger(id) && trashAccount(id)) deleted++;
+    for (const id of b.ids) if (Number.isInteger(id) && trashAccount(id, hid)) deleted++;
     return { deleted };
   });
 
   // ----- Account trash -----
 
-  app.get("/api/trash/accounts", async () => {
+  app.get("/api/trash/accounts", async (req) => {
     return db
       .prepare(
         `SELECT id, name, type, balance_cents, txn_count, deleted_at FROM deleted_accounts
-         ORDER BY deleted_at DESC, id DESC LIMIT 200`
+         WHERE household_id = ? ORDER BY deleted_at DESC, id DESC LIMIT 200`
       )
-      .all();
+      .all(req.householdId!);
   });
 
   /** Recreate a deleted account and re-insert its snapshotted transactions. */
   app.post("/api/trash/accounts/:id/restore", async (req, reply) => {
+    const hid = req.householdId!;
     const refId = Number((req.params as { id: string }).id);
-    const acct = db.prepare("SELECT * FROM deleted_accounts WHERE id = ?").get(refId) as
+    const acct = db.prepare("SELECT * FROM deleted_accounts WHERE id = ? AND household_id = ?").get(refId, hid) as
       | {
           id: number;
           name: string;
@@ -211,7 +230,7 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       // SimpleFIN id, restore the transactions into that one; else recreate it.
       let targetId: number;
       const existing = acct.simplefin_id
-        ? (db.prepare("SELECT id FROM accounts WHERE simplefin_id = ?").get(acct.simplefin_id) as
+        ? (db.prepare("SELECT id FROM accounts WHERE simplefin_id = ? AND household_id = ?").get(acct.simplefin_id, hid) as
             | { id: number }
             | undefined)
         : undefined;
@@ -220,14 +239,15 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       } else {
         targetId = db
           .prepare(
-            "INSERT INTO accounts (name, type, currency, balance_cents, simplefin_id) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO accounts (name, type, currency, balance_cents, simplefin_id, household_id) VALUES (?, ?, ?, ?, ?, ?)"
           )
           .run(
             acct.name,
             acct.type ?? "checking",
             acct.currency ?? "USD",
             acct.balance_cents ?? 0,
-            acct.simplefin_id
+            acct.simplefin_id,
+            hid
           ).lastInsertRowid as number;
       }
 
@@ -242,15 +262,15 @@ export function registerCoreRoutes(app: FastifyInstance): void {
         category_id: number | null;
       }>;
       const insert = db.prepare(
-        `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, category_id, external_id, import_hash)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+        `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, category_id, external_id, import_hash, household_id)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE NOT EXISTS (SELECT 1 FROM transactions x WHERE x.account_id = ? AND x.external_id IS NOT NULL AND x.external_id = ?)`
       );
       let restored = 0;
       for (const s of snaps) {
         if (s.date === null || s.amount_cents === null) continue;
         const cat = s.category_id
-          ? db.prepare("SELECT id FROM categories WHERE id = ?").get(s.category_id)
+          ? db.prepare("SELECT id FROM categories WHERE id = ? AND household_id = ?").get(s.category_id, hid)
           : null;
         restored += insert.run(
           targetId,
@@ -262,6 +282,7 @@ export function registerCoreRoutes(app: FastifyInstance): void {
           cat ? s.category_id : null,
           s.external_id,
           s.import_hash,
+          hid,
           targetId,
           s.external_id
         ).changes;
@@ -273,34 +294,37 @@ export function registerCoreRoutes(app: FastifyInstance): void {
     return { ok: true, restored: run() };
   });
 
-  /** Danger zone: wipe all data and re-seed defaults. Requires an explicit confirm token. */
+  /** Danger zone: wipe THIS household's data and re-seed its default categories. */
   app.post("/api/factory-reset", async (req, reply) => {
     const b = req.body as { confirm?: string };
     if (b?.confirm !== "DELETE EVERYTHING") {
       return reply.code(400).send({ error: "Missing confirmation token." });
     }
-    factoryReset();
+    resetHousehold(req.householdId!);
     return { ok: true };
   });
 
   // ----- Categories -----
-  app.get("/api/categories", async () => {
+  app.get("/api/categories", async (req) => {
+    const hid = req.householdId!;
     return db
       .prepare(
         `SELECT c.*, (SELECT COUNT(*) FROM transactions t WHERE t.category_id = c.id) AS txn_count
          FROM categories c
+         WHERE c.household_id = ${hid}
          ORDER BY CASE c.grp WHEN 'income' THEN 0 WHEN 'essential' THEN 1 WHEN 'lifestyle' THEN 2 WHEN 'savings' THEN 3 ELSE 4 END, c.name`
       )
       .all();
   });
 
   app.post("/api/categories", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { name?: string; grp?: string; kind?: string; icon?: string };
     if (!b?.name?.trim()) return reply.code(400).send({ error: "Category name is required." });
     try {
       const info = db
-        .prepare("INSERT INTO categories (name, grp, kind, icon) VALUES (?, ?, ?, ?)")
-        .run(b.name.trim(), b.grp ?? "other", b.kind ?? "expense", b.icon ?? "");
+        .prepare("INSERT INTO categories (household_id, name, grp, kind, icon) VALUES (?, ?, ?, ?, ?)")
+        .run(hid, b.name.trim(), b.grp ?? "other", b.kind ?? "expense", b.icon ?? "");
       return db.prepare("SELECT * FROM categories WHERE id = ?").get(info.lastInsertRowid);
     } catch {
       return reply.code(409).send({ error: "A category with that name already exists." });
@@ -308,9 +332,10 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/api/categories/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
     const b = req.body as { name?: string; grp?: string; kind?: string; icon?: string };
-    const existing = db.prepare("SELECT * FROM categories WHERE id = ?").get(id);
+    const existing = db.prepare("SELECT * FROM categories WHERE id = ? AND household_id = ?").get(id, hid);
     if (!existing) return reply.code(404).send({ error: "Category not found." });
     db.prepare(
       `UPDATE categories SET name = COALESCE(?, name), grp = COALESCE(?, grp),
@@ -320,42 +345,53 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   app.delete("/api/categories/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
-    const info = db.prepare("DELETE FROM categories WHERE id = ?").run(id);
+    const info = db.prepare("DELETE FROM categories WHERE id = ? AND household_id = ?").run(id, hid);
     if (info.changes === 0) return reply.code(404).send({ error: "Category not found." });
     return { ok: true };
   });
 
   // ----- Rules -----
-  app.get("/api/rules", async () => {
+  app.get("/api/rules", async (req) => {
     return db
       .prepare(
         `SELECT r.*, c.name AS category_name, c.icon AS category_icon
-         FROM rules r JOIN categories c ON c.id = r.category_id ORDER BY r.pattern`
+         FROM rules r JOIN categories c ON c.id = r.category_id WHERE r.household_id = ? ORDER BY r.pattern`
       )
-      .all();
+      .all(req.householdId!);
   });
 
   app.post("/api/rules", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { pattern?: string; category_id?: number };
     if (!b?.pattern?.trim() || !b.category_id) {
       return reply.code(400).send({ error: "pattern and category_id are required." });
     }
+    // Category must belong to this household.
+    if (!db.prepare("SELECT 1 FROM categories WHERE id = ? AND household_id = ?").get(b.category_id, hid)) {
+      return reply.code(400).send({ error: "Unknown category." });
+    }
     const info = db
-      .prepare("INSERT INTO rules (pattern, category_id) VALUES (?, ?)")
-      .run(b.pattern.trim().toLowerCase(), b.category_id);
-    const applied = applyRules();
+      .prepare("INSERT INTO rules (pattern, category_id, household_id) VALUES (?, ?, ?)")
+      .run(b.pattern.trim().toLowerCase(), b.category_id, hid);
+    const applied = applyRules(false, hid);
     return { id: info.lastInsertRowid, applied };
   });
 
   app.delete("/api/rules/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
-    const info = db.prepare("DELETE FROM rules WHERE id = ?").run(id);
+    const info = db.prepare("DELETE FROM rules WHERE id = ? AND household_id = ?").run(id, hid);
     if (info.changes === 0) return reply.code(404).send({ error: "Rule not found." });
     return { ok: true };
   });
 
   // ----- Budgets -----
+
+  /** True if a category belongs to the given household. */
+  const ownsCategory = (categoryId: number, hid: number): boolean =>
+    Boolean(db.prepare("SELECT 1 FROM categories WHERE id = ? AND household_id = ?").get(categoryId, hid));
 
   /** Number of line items a category has (0 = plain flat budget). */
   const itemCount = (categoryId: number): number =>
@@ -367,29 +403,32 @@ export function registerCoreRoutes(app: FastifyInstance): void {
    * If a category has line items, its budget total is the sum of them — keep the
    * budgets row in sync so every consumer (insights, debt planner) sees the total.
    */
-  const syncBudgetTotal = (categoryId: number): void => {
+  const syncBudgetTotal = (categoryId: number, hid: number): void => {
     if (itemCount(categoryId) === 0) return;
     const sum = (db
       .prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM budget_items WHERE category_id = ?")
       .get(categoryId) as { s: number }).s;
     db.prepare(
-      `INSERT INTO budgets (category_id, monthly_cents) VALUES (?, ?)
+      `INSERT INTO budgets (category_id, monthly_cents, household_id) VALUES (?, ?, ?)
        ON CONFLICT(category_id) DO UPDATE SET monthly_cents = excluded.monthly_cents`
-    ).run(categoryId, sum);
+    ).run(categoryId, sum, hid);
   };
 
-  app.get("/api/budgets", async () => {
+  app.get("/api/budgets", async (req) => {
+    const hid = req.householdId!;
     const rows = db
       .prepare(
         `SELECT b.category_id, b.monthly_cents, c.name, c.grp, c.icon
-         FROM budgets b JOIN categories c ON c.id = b.category_id ORDER BY b.monthly_cents DESC`
+         FROM budgets b JOIN categories c ON c.id = b.category_id
+         WHERE c.household_id = ? ORDER BY b.monthly_cents DESC`
       )
-      .all() as Array<{ category_id: number; monthly_cents: number; name: string; grp: string; icon: string }>;
+      .all(hid) as Array<{ category_id: number; monthly_cents: number; name: string; grp: string; icon: string }>;
     const items = db
       .prepare(
-        `SELECT id, category_id, name, amount_cents FROM budget_items ORDER BY sort, id`
+        `SELECT bi.id, bi.category_id, bi.name, bi.amount_cents FROM budget_items bi
+         JOIN categories c ON c.id = bi.category_id WHERE c.household_id = ? ORDER BY bi.sort, bi.id`
       )
-      .all() as Array<{ id: number; category_id: number; name: string; amount_cents: number }>;
+      .all(hid) as Array<{ id: number; category_id: number; name: string; amount_cents: number }>;
     const byCat = new Map<number, Array<{ id: number; name: string; amount_cents: number }>>();
     for (const it of items) {
       if (!byCat.has(it.category_id)) byCat.set(it.category_id, []);
@@ -403,17 +442,19 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   // DELETE below. Categories with line items have their total driven by the items,
   // so a flat set is ignored for those (the items win).
   app.put("/api/budgets", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { items?: Array<{ category_id: number; monthly_cents: number }> };
     if (!Array.isArray(b?.items)) return reply.code(400).send({ error: "items array is required." });
     const upsert = db.prepare(
-      `INSERT INTO budgets (category_id, monthly_cents) VALUES (?, ?)
+      `INSERT INTO budgets (category_id, monthly_cents, household_id) VALUES (?, ?, ?)
        ON CONFLICT(category_id) DO UPDATE SET monthly_cents = excluded.monthly_cents`
     );
     const run = db.transaction(() => {
       for (const item of b.items!) {
         if (!Number.isFinite(item.category_id) || !Number.isFinite(item.monthly_cents)) continue;
+        if (!ownsCategory(item.category_id, hid)) continue; // not this household's category
         if (itemCount(item.category_id) > 0) continue; // line items are the source of truth
-        upsert.run(item.category_id, Math.max(0, Math.round(item.monthly_cents)));
+        upsert.run(item.category_id, Math.max(0, Math.round(item.monthly_cents)), hid);
       }
     });
     run();
@@ -421,7 +462,9 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   app.delete("/api/budgets/:categoryId", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { categoryId: string }).categoryId);
+    if (!ownsCategory(id, hid)) return reply.code(404).send({ error: "No budget for that category." });
     const run = db.transaction(() => {
       db.prepare("DELETE FROM budget_items WHERE category_id = ?").run(id);
       return db.prepare("DELETE FROM budgets WHERE category_id = ?").run(id);
@@ -433,11 +476,11 @@ export function registerCoreRoutes(app: FastifyInstance): void {
 
   // ----- Budget line items (folders under a category) -----
   app.post("/api/budgets/items", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { category_id?: number; name?: string; amount_cents?: number };
     const catId = Number(b?.category_id);
     if (!Number.isInteger(catId)) return reply.code(400).send({ error: "category_id is required." });
-    const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(catId);
-    if (!cat) return reply.code(404).send({ error: "No such category." });
+    if (!ownsCategory(catId, hid)) return reply.code(404).send({ error: "No such category." });
     const cents = Math.max(0, Math.round(Number(b?.amount_cents ?? 0)));
     const nextSort =
       (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM budget_items WHERE category_id = ?").get(catId) as {
@@ -445,13 +488,13 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       }).s;
     const run = db.transaction(() => {
       const info = db
-        .prepare("INSERT INTO budget_items (category_id, name, amount_cents, sort) VALUES (?, ?, ?, ?)")
-        .run(catId, (b?.name ?? "").trim(), Number.isFinite(cents) ? cents : 0, nextSort);
+        .prepare("INSERT INTO budget_items (category_id, name, amount_cents, sort, household_id) VALUES (?, ?, ?, ?, ?)")
+        .run(catId, (b?.name ?? "").trim(), Number.isFinite(cents) ? cents : 0, nextSort, hid);
       // Ensure a budgets row exists so the category shows up, then sync the total.
       db.prepare(
-        "INSERT INTO budgets (category_id, monthly_cents) VALUES (?, 0) ON CONFLICT(category_id) DO NOTHING"
-      ).run(catId);
-      syncBudgetTotal(catId);
+        "INSERT INTO budgets (category_id, monthly_cents, household_id) VALUES (?, 0, ?) ON CONFLICT(category_id) DO NOTHING"
+      ).run(catId, hid);
+      syncBudgetTotal(catId, hid);
       return info;
     });
     const info = run();
@@ -459,11 +502,12 @@ export function registerCoreRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/api/budgets/items/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
     const row = db.prepare("SELECT category_id FROM budget_items WHERE id = ?").get(id) as
       | { category_id: number }
       | undefined;
-    if (!row) return reply.code(404).send({ error: "No such budget item." });
+    if (!row || !ownsCategory(row.category_id, hid)) return reply.code(404).send({ error: "No such budget item." });
     const b = req.body as { name?: string; amount_cents?: number };
     const run = db.transaction(() => {
       if (typeof b?.name === "string") {
@@ -475,28 +519,30 @@ export function registerCoreRoutes(app: FastifyInstance): void {
           id
         );
       }
-      syncBudgetTotal(row.category_id);
+      syncBudgetTotal(row.category_id, hid);
     });
     run();
     return { ok: true };
   });
 
   app.delete("/api/budgets/items/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
     const row = db.prepare("SELECT category_id FROM budget_items WHERE id = ?").get(id) as
       | { category_id: number }
       | undefined;
-    if (!row) return reply.code(404).send({ error: "No such budget item." });
+    if (!row || !ownsCategory(row.category_id, hid)) return reply.code(404).send({ error: "No such budget item." });
     const run = db.transaction(() => {
       db.prepare("DELETE FROM budget_items WHERE id = ?").run(id);
-      syncBudgetTotal(row.category_id); // no-op once the last item is gone; total stays as last sum
+      syncBudgetTotal(row.category_id, hid); // no-op once the last item is gone; total stays as last sum
     });
     run();
     return { ok: true };
   });
 
   // ----- App status / settings -----
-  const settingsPayload = () => {
+  // AI/provider settings are server-global; include_credit is per-household.
+  const settingsPayload = (hid: number) => {
     const llm = resolveLlmConfig();
     return {
       ai_provider: llm.provider,
@@ -507,18 +553,17 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       anthropic_key_source: llm.keySource,
       ollama_url: llm.ollamaUrl,
       ollama_model: llm.ollamaModel,
-      simplefin_connected: isConnected(),
-      simplefin_last_sync: lastSync(),
+      simplefin_connected: isConnected(hid),
+      simplefin_last_sync: lastSync(hid),
       currency: getSetting("currency") ?? "USD",
-      include_credit: getSetting("include_credit") === "1",
-      // Dismissed once the user says they've organized transactions into accounts.
-      accounts_organized: getSetting("accounts_organized") === "1"
+      include_credit: getHouseholdSetting(hid, "include_credit") === "1"
     };
   };
 
-  app.get("/api/settings", async () => settingsPayload());
+  app.get("/api/settings", async (req) => settingsPayload(req.householdId!));
 
   app.put("/api/settings", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as {
       ai_provider?: string;
       anthropic_api_key?: string;
@@ -528,10 +573,7 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       include_credit?: boolean;
     };
     if (b.include_credit !== undefined) {
-      setSetting("include_credit", b.include_credit ? "1" : "0");
-    }
-    if ((b as { accounts_organized?: boolean }).accounts_organized !== undefined) {
-      setSetting("accounts_organized", (b as { accounts_organized?: boolean }).accounts_organized ? "1" : "0");
+      setHouseholdSetting(hid, "include_credit", b.include_credit ? "1" : "0");
     }
     if (b.ai_provider !== undefined) {
       if (b.ai_provider !== "anthropic" && b.ai_provider !== "ollama") {
@@ -559,6 +601,6 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       if (m === "") deleteSetting("ollama_model");
       else setSetting("ollama_model", m);
     }
-    return settingsPayload();
+    return settingsPayload(hid);
   });
 }

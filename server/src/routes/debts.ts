@@ -4,16 +4,17 @@ import { simulatePayoff, type DebtInput } from "../services/debts.js";
 import { payoffAssessment } from "../services/insights.js";
 
 export function registerDebtRoutes(app: FastifyInstance): void {
-  app.get("/api/debts", async () => {
-    return db.prepare("SELECT * FROM debts ORDER BY apr DESC").all();
+  app.get("/api/debts", async (req) => {
+    return db.prepare("SELECT * FROM debts WHERE household_id = ? ORDER BY apr DESC").all(req.householdId!);
   });
 
   /** The financial picture behind the payoff planner: leftover money + realistic cuts. */
-  app.get("/api/debts/plan", async () => {
-    return payoffAssessment();
+  app.get("/api/debts/plan", async (req) => {
+    return payoffAssessment(req.householdId!);
   });
 
   app.post("/api/debts", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as {
       name?: string;
       balance_cents?: number;
@@ -25,12 +26,13 @@ export function registerDebtRoutes(app: FastifyInstance): void {
     }
     if (b.apr! < 0 || b.apr! > 200) return reply.code(400).send({ error: "APR must be between 0 and 200." });
     const info = db
-      .prepare("INSERT INTO debts (name, balance_cents, apr, min_payment_cents) VALUES (?, ?, ?, ?)")
-      .run(b.name.trim(), Math.round(b.balance_cents!), b.apr, Math.round(b.min_payment_cents!));
+      .prepare("INSERT INTO debts (name, balance_cents, apr, min_payment_cents, household_id) VALUES (?, ?, ?, ?, ?)")
+      .run(b.name.trim(), Math.round(b.balance_cents!), b.apr, Math.round(b.min_payment_cents!), hid);
     return db.prepare("SELECT * FROM debts WHERE id = ?").get(info.lastInsertRowid);
   });
 
   app.patch("/api/debts/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
     const b = req.body as {
       name?: string;
@@ -38,7 +40,7 @@ export function registerDebtRoutes(app: FastifyInstance): void {
       apr?: number;
       min_payment_cents?: number;
     };
-    const existing = db.prepare("SELECT * FROM debts WHERE id = ?").get(id);
+    const existing = db.prepare("SELECT * FROM debts WHERE id = ? AND household_id = ?").get(id, hid);
     if (!existing) return reply.code(404).send({ error: "Debt not found." });
     db.prepare(
       `UPDATE debts SET name = COALESCE(?, name), balance_cents = COALESCE(?, balance_cents),
@@ -55,7 +57,7 @@ export function registerDebtRoutes(app: FastifyInstance): void {
 
   app.delete("/api/debts/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const info = db.prepare("DELETE FROM debts WHERE id = ?").run(id);
+    const info = db.prepare("DELETE FROM debts WHERE id = ? AND household_id = ?").run(id, req.householdId!);
     if (info.changes === 0) return reply.code(404).send({ error: "Debt not found." });
     return { ok: true };
   });
@@ -65,19 +67,20 @@ export function registerDebtRoutes(app: FastifyInstance): void {
    * account carrying a negative balance) become debts. APR and minimum payment
    * are estimates the user should correct from their statement.
    */
-  app.post("/api/debts/import-accounts", async () => {
+  app.post("/api/debts/import-accounts", async (req) => {
+    const hid = req.householdId!;
     const accounts = db
       .prepare(
         `SELECT id, name, type, balance_cents FROM accounts
-         WHERE archived = 0 AND (type IN ('credit', 'loan') OR balance_cents < 0)`
+         WHERE archived = 0 AND household_id = ? AND (type IN ('credit', 'loan') OR balance_cents < 0)`
       )
-      .all() as Array<{ id: number; name: string; type: string; balance_cents: number }>;
+      .all(hid) as Array<{ id: number; name: string; type: string; balance_cents: number }>;
 
     const existing = new Set(
-      (db.prepare("SELECT lower(name) AS n FROM debts").all() as Array<{ n: string }>).map((r) => r.n)
+      (db.prepare("SELECT lower(name) AS n FROM debts WHERE household_id = ?").all(hid) as Array<{ n: string }>).map((r) => r.n)
     );
     const insert = db.prepare(
-      "INSERT INTO debts (name, balance_cents, apr, min_payment_cents) VALUES (?, ?, ?, ?)"
+      "INSERT INTO debts (name, balance_cents, apr, min_payment_cents, household_id) VALUES (?, ?, ?, ?, ?)"
     );
 
     const created: string[] = [];
@@ -96,7 +99,7 @@ export function registerDebtRoutes(app: FastifyInstance): void {
       const apr = a.type === "loan" ? 7.5 : 21.99;
       const minPayment =
         a.type === "loan" ? Math.max(5000, Math.round(owed * 0.01)) : Math.max(2500, Math.round(owed * 0.02));
-      insert.run(a.name, owed, apr, minPayment);
+      insert.run(a.name, owed, apr, minPayment, hid);
       created.push(a.name);
     }
     return { created, skipped, note: created.length > 0 ? "APR and minimum payments are estimates — edit them to match your statements." : undefined };
@@ -106,7 +109,7 @@ export function registerDebtRoutes(app: FastifyInstance): void {
   app.post("/api/debts/simulate", async (req, reply) => {
     const b = (req.body ?? {}) as { extra_cents?: number };
     const extra = Number.isFinite(b.extra_cents) ? Math.max(0, Math.round(b.extra_cents!)) : 0;
-    const debts = db.prepare("SELECT * FROM debts").all() as DebtInput[];
+    const debts = db.prepare("SELECT * FROM debts WHERE household_id = ?").all(req.householdId!) as DebtInput[];
     if (debts.length === 0) return reply.code(400).send({ error: "Add at least one debt first." });
     return {
       extra_cents: extra,

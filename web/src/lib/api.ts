@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
+    credentials: "same-origin", // send the session cookie
     headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
@@ -236,7 +237,6 @@ export interface Settings {
   simplefin_last_sync: string | null;
   currency: string;
   include_credit: boolean;
-  accounts_organized: boolean;
 }
 
 export interface DupTxn extends Txn {

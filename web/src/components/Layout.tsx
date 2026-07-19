@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
-import { api, useApi } from "../lib/api";
-import type { Settings as AppSettings } from "../lib/api";
+import { NavLink, Outlet } from "react-router-dom";
+import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 import { Icon } from "./ui";
 
@@ -75,22 +75,25 @@ function AcanthusCorner() {
 }
 
 /**
- * Reminder to move imported transactions into the accounts you actually want.
- * Shows on every app open until the user marks organizing finished; an ✕ hides
- * it for the current session only.
+ * Prompt the first user to claim pre-existing (pre-accounts) data into their
+ * household. Shows on every app open while unclaimed data exists; claiming it
+ * assigns everything to the current household and the prompt then disappears.
  */
-function OrganizeBanner() {
-  const { data: settings, refetch } = useApi<AppSettings>("/api/settings");
+function ClaimDataBanner() {
+  const { me, refresh } = useAuth();
   const [hidden, setHidden] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  if (hidden || !settings || settings.accounts_organized) return null;
+  if (hidden || !me?.user || !me.is_first_user || me.unclaimed_count === 0) return null;
 
-  const finish = async () => {
+  const claim = async () => {
+    setBusy(true);
     try {
-      await api.put("/api/settings", { accounts_organized: true });
-      refetch();
+      await api.post("/api/claim");
+      await refresh();
+      window.location.reload();
     } catch {
-      /* non-critical — banner just stays */
+      setBusy(false);
     }
   };
 
@@ -98,24 +101,68 @@ function OrganizeBanner() {
     <div className="mb-4 flex flex-wrap items-center gap-3 rounded-[14px] border border-accent/30 bg-accent-soft/60 px-4 py-3 text-sm">
       <Icon name="wallet" size={18} className="shrink-0 text-accent" />
       <div className="min-w-0 flex-1">
-        <span className="font-medium text-ink">Organize your transactions into accounts.</span>{" "}
+        <span className="font-medium text-ink">Move your existing data into this household.</span>{" "}
         <span className="text-ink2">
-          Select transactions and use “Move to account,” or merge accounts in Settings, so everything sits under the
-          account names you want.
+          There's finance data from before you had an account. Claim it to bring your accounts, transactions, budgets
+          and debts into your household.
         </span>
       </div>
-      <Link
-        to="/transactions"
-        className="btn-emboss inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-accent-fg hover:brightness-108"
+      <button
+        onClick={claim}
+        disabled={busy}
+        className="btn-emboss inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-accent-fg hover:brightness-108 disabled:opacity-50"
       >
-        Move transactions
-      </Link>
-      <button onClick={finish} className="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:bg-surface2">
-        Finished organizing
+        Move my data here
       </button>
       <button onClick={() => setHidden(true)} className="rounded-md p-1 text-ink3 hover:text-ink" title="Hide until next time">
         <Icon name="x" size={15} />
       </button>
+    </div>
+  );
+}
+
+/** Household picker + signed-in user + logout, for the sidebar footer. */
+function AccountBox({ collapsed }: { collapsed: boolean }) {
+  const { me, switchHousehold, logout } = useAuth();
+  if (!me?.user) return null;
+
+  if (collapsed) {
+    return (
+      <button
+        onClick={logout}
+        className="flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm text-ink2 hover:bg-surface2 hover:text-ink"
+        title={`${me.user.name || me.user.email} — sign out`}
+      >
+        <Icon name="x" size={16} />
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {me.households.length > 1 && (
+        <select
+          value={me.active_household_id ?? ""}
+          onChange={(e) => switchHousehold(Number(e.target.value))}
+          className="field-skeu h-8 w-full rounded-lg border border-line bg-surface px-2 text-xs text-ink"
+          title="Switch household"
+        >
+          {me.households.map((h) => (
+            <option key={h.id} value={h.id}>
+              {h.name}
+              {h.members > 1 ? ` · ${h.members}` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="min-w-0 truncate text-xs text-ink3" title={me.user.email}>
+          {me.user.name || me.user.email}
+        </span>
+        <button onClick={logout} className="shrink-0 text-xs text-ink3 hover:text-bad" title="Sign out">
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }
@@ -156,7 +203,8 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="space-y-0.5 border-t border-line p-2">
+        <div className="space-y-1.5 border-t border-line p-2">
+          {!collapsed && <AccountBox collapsed={collapsed} />}
           <ThemeToggle collapsed={collapsed} />
           <button
             onClick={toggleCollapsed}
@@ -166,13 +214,14 @@ export default function Layout() {
             <span className="text-lg leading-none">{collapsed ? "»" : "«"}</span>
             {!collapsed && "Collapse"}
           </button>
+          {collapsed && <AccountBox collapsed={collapsed} />}
         </div>
       </aside>
 
       {/* Main */}
       <main className="z-10 min-w-0 flex-1 overflow-y-auto pb-20 md:pb-0">
         <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
-          <OrganizeBanner />
+          <ClaimDataBanner />
           <Outlet />
         </div>
       </main>

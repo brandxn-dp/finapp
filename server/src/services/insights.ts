@@ -1,4 +1,4 @@
-import { db, getSetting } from "../db.js";
+import { db, getHouseholdSetting } from "../db.js";
 import { median } from "../util.js";
 
 /**
@@ -7,20 +7,24 @@ import { median } from "../util.js";
  * and its later payment from checking would otherwise double-count). Loans,
  * investments, and retirement never count as cash spending.
  */
-export function includedAccountTypes(): string[] {
+export function includedAccountTypes(hid: number): string[] {
   const base = ["checking", "savings", "cash"];
-  if (getSetting("include_credit") === "1") base.push("credit");
+  if (getHouseholdSetting(hid, "include_credit") === "1") base.push("credit");
   return base;
 }
 
 /** Safe SQL `IN (...)` list of included account types (values are a fixed whitelist). */
-function includedTypesSql(): string {
-  return "(" + includedAccountTypes().map((t) => `'${t}'`).join(",") + ")";
+function includedTypesSql(hid: number): string {
+  return "(" + includedAccountTypes(hid).map((t) => `'${t}'`).join(",") + ")";
 }
 
-/** WHERE fragment restricting to counted accounts. Prefix the alias, e.g. accountFilter("t"). */
-function accountFilter(alias: string): string {
-  return `${alias}.account_id IN (SELECT id FROM accounts WHERE type IN ${includedTypesSql()})`;
+/**
+ * WHERE fragment restricting to this household's counted accounts. Prefix the
+ * alias, e.g. accountFilter("t", hid). Also scopes the transactions to the
+ * household directly, so nothing from another household can leak in.
+ */
+function accountFilter(alias: string, hid: number): string {
+  return `${alias}.household_id = ${hid} AND ${alias}.account_id IN (SELECT id FROM accounts WHERE type IN ${includedTypesSql(hid)} AND household_id = ${hid})`;
 }
 
 /** Months as YYYY-MM, newest first, excluding the current (partial) month when asked. */
@@ -48,7 +52,7 @@ export interface MonthlyCashflow {
  * out that isn't a transfer (uncategorized outflows included so the app is
  * useful before categorization). Transfers are invisible on both sides.
  */
-export function monthlyCashflow(months: number): MonthlyCashflow[] {
+export function monthlyCashflow(months: number, hid: number): MonthlyCashflow[] {
   const rows = db
     .prepare(
       `SELECT substr(t.date, 1, 7) AS month,
@@ -56,7 +60,7 @@ export function monthlyCashflow(months: number): MonthlyCashflow[] {
               SUM(CASE WHEN t.amount_cents < 0 AND (c.kind IS NULL OR c.kind NOT IN ('transfer', 'income')) THEN -t.amount_cents ELSE 0 END) AS expense_cents
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
-       WHERE ${accountFilter("t")}
+       WHERE ${accountFilter("t", hid)}
        GROUP BY month ORDER BY month DESC LIMIT ?`
     )
     .all(months) as MonthlyCashflow[];
@@ -64,13 +68,13 @@ export function monthlyCashflow(months: number): MonthlyCashflow[] {
 }
 
 /** Months (YYYY-MM) that actually contain non-transfer transactions — the real data window. */
-export function coveredMonths(candidates: string[]): string[] {
+export function coveredMonths(candidates: string[], hid: number): string[] {
   const rows = db
     .prepare(
       `SELECT DISTINCT substr(t.date, 1, 7) AS month
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
-       WHERE (c.kind IS NULL OR c.kind != 'transfer')`
+       WHERE t.household_id = ${hid} AND (c.kind IS NULL OR c.kind != 'transfer')`
     )
     .all() as Array<{ month: string }>;
   const have = new Set(rows.map((r) => r.month));
@@ -86,7 +90,7 @@ export interface CategorySpend {
 }
 
 /** Spending by category for one month (YYYY-MM). */
-export function spendingByCategory(month: string): CategorySpend[] {
+export function spendingByCategory(month: string, hid: number): CategorySpend[] {
   return db
     .prepare(
       `SELECT t.category_id, COALESCE(c.name, 'Uncategorized') AS name,
@@ -97,7 +101,7 @@ export function spendingByCategory(month: string): CategorySpend[] {
        WHERE t.amount_cents < 0
          AND substr(t.date, 1, 7) = ?
          AND (c.kind IS NULL OR c.kind != 'transfer')
-         AND ${accountFilter("t")}
+         AND ${accountFilter("t", hid)}
        GROUP BY t.category_id
        HAVING total_cents > 0
        ORDER BY total_cents DESC`
@@ -128,7 +132,7 @@ const CADENCES: Array<{ name: RecurringItem["cadence"]; min: number; max: number
 ];
 
 /** Detect recurring outflows (subscriptions, rent, insurance…) from payment patterns. */
-export function detectRecurring(): RecurringItem[] {
+export function detectRecurring(hid: number): RecurringItem[] {
   const rows = db
     .prepare(
       `SELECT t.payee_norm, t.payee, t.date, t.amount_cents, c.name AS category, c.icon
@@ -137,7 +141,7 @@ export function detectRecurring(): RecurringItem[] {
        WHERE t.amount_cents < 0 AND t.payee_norm != ''
          AND t.date >= date('now', '-15 months')
          AND (c.kind IS NULL OR c.kind != 'transfer')
-         AND ${accountFilter("t")}
+         AND ${accountFilter("t", hid)}
        ORDER BY t.payee_norm, t.date`
     )
     .all() as Array<{
@@ -198,7 +202,7 @@ export function detectRecurring(): RecurringItem[] {
 
   // Apply the user's judgements: "this is not actually a bill"
   const overrides = new Set(
-    (db.prepare("SELECT payee_norm FROM recurring_overrides WHERE status = 'ignored'").all() as Array<{
+    (db.prepare("SELECT payee_norm FROM recurring_overrides WHERE status = 'ignored' AND household_id = ?").all(hid) as Array<{
       payee_norm: string;
     }>).map((r) => r.payee_norm)
   );
@@ -229,9 +233,9 @@ export interface BudgetSuggestion {
  * the months they occur; occasional ones (gifts, travel) spread their total
  * across the data window.
  */
-export function suggestBudgets(): BudgetSuggestion[] {
+export function suggestBudgets(hid: number): BudgetSuggestion[] {
   const window = recentMonths(6, true); // include current month so short histories still work
-  const covered = coveredMonths(window);
+  const covered = coveredMonths(window, hid);
   if (covered.length === 0) return [];
 
   const rows = db
@@ -242,7 +246,7 @@ export function suggestBudgets(): BudgetSuggestion[] {
        JOIN categories c ON c.id = t.category_id
        WHERE t.amount_cents < 0 AND c.kind = 'expense'
          AND substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
-         AND ${accountFilter("t")}
+         AND ${accountFilter("t", hid)}
        GROUP BY t.category_id, month
        HAVING total_cents > 0`
     )
@@ -256,7 +260,7 @@ export function suggestBudgets(): BudgetSuggestion[] {
   }>;
 
   const budgets = new Map(
-    (db.prepare("SELECT category_id, monthly_cents FROM budgets").all() as Array<{
+    (db.prepare("SELECT category_id, monthly_cents FROM budgets WHERE household_id = ?").all(hid) as Array<{
       category_id: number;
       monthly_cents: number;
     }>).map((b) => [b.category_id, b.monthly_cents])
@@ -308,7 +312,7 @@ export interface FiftyThirtyTwenty {
 }
 
 /** Average monthly 50/30/20 breakdown over the last N full months. */
-export function fiftyThirtyTwenty(monthCount = 3): FiftyThirtyTwenty | null {
+export function fiftyThirtyTwenty(monthCount = 3, hid = 0): FiftyThirtyTwenty | null {
   const months = recentMonths(monthCount, false);
   const rows = db
     .prepare(
@@ -318,7 +322,7 @@ export function fiftyThirtyTwenty(monthCount = 3): FiftyThirtyTwenty | null {
        LEFT JOIN categories c ON c.id = t.category_id
        WHERE substr(t.date, 1, 7) IN (${months.map(() => "?").join(",")})
          AND (c.kind IS NULL OR c.kind != 'transfer')
-         AND ${accountFilter("t")}
+         AND ${accountFilter("t", hid)}
        GROUP BY month, grp, kind`
     )
     .all(...months) as Array<{ month: string; grp: string; kind: string; total_cents: number }>;
@@ -389,11 +393,13 @@ export interface PayoffAssessment {
  * places to find more. Based on the covered data window, income = income-kind
  * categories only, transfers invisible.
  */
-export function payoffAssessment(): PayoffAssessment {
+export function payoffAssessment(hid: number): PayoffAssessment {
   const window = recentMonths(6, true);
-  const covered = coveredMonths(window).slice(0, 3); // up to the 3 most recent months with data
+  const covered = coveredMonths(window, hid).slice(0, 3); // up to the 3 most recent months with data
   const totalBudget = (
-    db.prepare("SELECT COALESCE(SUM(monthly_cents), 0) AS total FROM budgets").get() as { total: number }
+    db.prepare("SELECT COALESCE(SUM(monthly_cents), 0) AS total FROM budgets WHERE household_id = ?").get(hid) as {
+      total: number;
+    }
   ).total;
   const empty: PayoffAssessment = {
     data_ok: false,
@@ -416,7 +422,7 @@ export function payoffAssessment(): PayoffAssessment {
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
        WHERE substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
-         AND ${accountFilter("t")}`
+         AND ${accountFilter("t", hid)}`
     )
     .get(...covered) as { income: number | null; spending: number | null };
 
@@ -425,7 +431,7 @@ export function payoffAssessment(): PayoffAssessment {
   const spending = Math.round((totals.spending ?? 0) / n);
 
   const minPayments = (
-    db.prepare("SELECT COALESCE(SUM(min_payment_cents), 0) AS total FROM debts WHERE balance_cents > 0").get() as {
+    db.prepare("SELECT COALESCE(SUM(min_payment_cents), 0) AS total FROM debts WHERE balance_cents > 0 AND household_id = ?").get(hid) as {
       total: number;
     }
   ).total;
@@ -443,7 +449,7 @@ export function payoffAssessment(): PayoffAssessment {
        JOIN categories c ON c.id = t.category_id
        WHERE t.amount_cents < 0 AND c.kind = 'expense'
          AND substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
-         AND ${accountFilter("t")}
+         AND ${accountFilter("t", hid)}
        GROUP BY t.category_id
        HAVING avg_monthly_cents >= 1000
        ORDER BY avg_monthly_cents DESC
@@ -451,7 +457,7 @@ export function payoffAssessment(): PayoffAssessment {
     )
     .all(...covered) as CutCandidate[];
 
-  const recurringWants = detectRecurring()
+  const recurringWants = detectRecurring(hid)
     .filter((r) => !r.ignored)
     .reduce((sum, r) => {
       const perMonth =
@@ -484,7 +490,7 @@ export interface EmergencyFund {
   target6_cents: number;
 }
 
-export function emergencyFund(): EmergencyFund {
+export function emergencyFund(hid: number): EmergencyFund {
   const months = recentMonths(3, false);
   const row = db
     .prepare(
@@ -493,7 +499,7 @@ export function emergencyFund(): EmergencyFund {
        JOIN categories c ON c.id = t.category_id
        WHERE t.amount_cents < 0 AND c.grp = 'essential'
          AND substr(t.date, 1, 7) IN (${months.map(() => "?").join(",")})
-         AND ${accountFilter("t")}`
+         AND ${accountFilter("t", hid)}`
     )
     .get(...months) as { monthly: number | null };
   const monthly = row.monthly ?? 0;
@@ -501,9 +507,9 @@ export function emergencyFund(): EmergencyFund {
   const savings = db
     .prepare(
       `SELECT COALESCE(SUM(balance_cents), 0) AS total FROM accounts
-       WHERE archived = 0 AND type IN ('savings', 'checking', 'cash')`
+       WHERE archived = 0 AND type IN ('savings', 'checking', 'cash') AND household_id = ?`
     )
-    .get() as { total: number };
+    .get(hid) as { total: number };
 
   return {
     monthly_essentials_cents: monthly,

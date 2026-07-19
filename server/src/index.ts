@@ -5,20 +5,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import "./db.js"; // opens the database and runs migrations/seed
+import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerTransactionRoutes } from "./routes/transactions.js";
 import { registerInsightRoutes } from "./routes/insights.js";
 import { registerDebtRoutes } from "./routes/debts.js";
 import { registerSimplefinRoutes } from "./routes/simplefin.js";
 
-const app = Fastify({ logger: true, bodyLimit: 20 * 1024 * 1024 });
+const app = Fastify({ logger: true, bodyLimit: 20 * 1024 * 1024, trustProxy: true });
 
 if (!config.isProd) {
-  await app.register(cors, { origin: true });
+  // In dev the Vite proxy forwards same-origin, so cookies flow; allow credentials.
+  await app.register(cors, { origin: true, credentials: true });
 }
 
 app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
 
+// Auth first: this installs the global guard + session resolution used by all routes.
+registerAuthRoutes(app);
 registerCoreRoutes(app);
 registerTransactionRoutes(app);
 registerInsightRoutes(app);

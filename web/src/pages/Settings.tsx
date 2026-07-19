@@ -4,6 +4,7 @@ import type { Account, Category, DeletedAccount, Rule, Settings as AppSettings, 
 import { money, shortDate } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import type { Theme } from "../lib/theme";
+import { useAuth } from "../lib/auth";
 import { Button, Card, Icon, Input, Modal, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 const ACCOUNT_TYPES = ["checking", "savings", "credit", "investment", "retirement", "loan", "cash", "other"];
@@ -45,6 +46,7 @@ export default function Settings() {
   return (
     <div className="space-y-5">
       <PageHeader title="Settings" />
+      <HouseholdCard />
       <AppearanceCard />
       <SimplefinCard />
       <CalcPrefsCard />
@@ -61,6 +63,160 @@ export default function Settings() {
         transaction. Insights are educational, not professional financial advice.
       </p>
     </div>
+  );
+}
+
+interface Member {
+  id: number;
+  email: string;
+  name: string;
+  role: string;
+}
+
+function HouseholdCard() {
+  const { me, switchHousehold, refresh } = useAuth();
+  const { toast } = useToast();
+  const active = me?.households.find((h) => h.id === me.active_household_id);
+  const [newName, setNewName] = useState("");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [inviteLink, setInviteLink] = useState("");
+
+  useEffect(() => {
+    if (me?.active_household_id) {
+      api
+        .get<{ members: Member[] }>(`/api/households/${me.active_household_id}/members`)
+        .then((r) => setMembers(r.members))
+        .catch(() => setMembers([]));
+    }
+  }, [me?.active_household_id]);
+
+  if (!me?.user) return null;
+
+  const createHousehold = async () => {
+    if (!newName.trim()) return;
+    try {
+      await api.post("/api/households", { name: newName.trim() });
+      setNewName("");
+      await refresh();
+      window.location.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  const makeInvite = async () => {
+    try {
+      const r = await api.post<{ token: string }>(`/api/households/${me.active_household_id}/invites`, {});
+      setInviteLink(`${window.location.origin}/invite/${r.token}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  const leave = async () => {
+    if (!window.confirm(`Leave "${active?.name}"? You'll lose access to its shared data unless re-invited.`)) return;
+    try {
+      await api.del(`/api/households/${me.active_household_id}/members/${me.user!.id}`);
+      await refresh();
+      window.location.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  const removeMember = async (uid: number) => {
+    try {
+      await api.del(`/api/households/${me.active_household_id}/members/${uid}`);
+      const r = await api.get<{ members: Member[] }>(`/api/households/${me.active_household_id}/members`);
+      setMembers(r.members);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
+  return (
+    <Card
+      title="Household"
+      collapsible
+      defaultOpen={false}
+      summary={`${active?.name ?? "—"} · ${members.length} member${members.length === 1 ? "" : "s"}`}
+    >
+      <div className="space-y-4">
+        {me.households.length > 1 && (
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-ink2">Active household</span>
+            <Select
+              value={me.active_household_id ?? ""}
+              onChange={(e) => switchHousehold(Number(e.target.value))}
+              className="w-full max-w-xs"
+            >
+              {me.households.map((h) => (
+                <option key={h.id} value={h.id}>{h.name}</option>
+              ))}
+            </Select>
+          </label>
+        )}
+
+        <div>
+          <div className="mb-1 text-xs font-medium text-ink2">Members of {active?.name}</div>
+          <ul className="divide-y divide-line">
+            {members.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                <span className="min-w-0 truncate text-ink">
+                  {m.name || m.email}
+                  <span className="ml-2 text-[10px] uppercase tracking-wider text-ink3">{m.role}</span>
+                  {m.id === me.user!.id && <span className="ml-1 text-xs text-ink3">(you)</span>}
+                </span>
+                {m.id !== me.user!.id && members.length > 1 && (
+                  <button className="shrink-0 text-xs text-ink3 hover:text-bad" onClick={() => removeMember(m.id)}>
+                    Remove
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div>
+          <div className="mb-1 text-xs font-medium text-ink2">Invite someone to share this household</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="subtle" onClick={makeInvite}>
+              <Icon name="link" size={14} /> Create invite link
+            </Button>
+            {inviteLink && (
+              <input
+                readOnly
+                value={inviteLink}
+                onFocus={(e) => e.target.select()}
+                className="field-skeu h-8 min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 text-xs text-ink2"
+              />
+            )}
+          </div>
+          {inviteLink && (
+            <p className="mt-1 text-[11px] text-ink3">
+              Send this link to someone with an account. It's valid for 7 days and works once.
+            </p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-end justify-between gap-3 border-t border-line pt-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-ink2">Start a new household</span>
+            <div className="flex gap-2">
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Rental property" className="w-48" />
+              <Button size="sm" variant="subtle" onClick={createHousehold} disabled={!newName.trim()}>
+                <Icon name="plus" size={14} /> Create
+              </Button>
+            </div>
+          </label>
+          {me.households.length > 1 && (
+            <Button size="sm" variant="danger" onClick={leave}>
+              Leave this household
+            </Button>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }
 

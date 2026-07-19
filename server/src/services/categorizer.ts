@@ -36,20 +36,20 @@ export interface CategorizeResult {
  * AI/cache-assigned categories) and re-runs from scratch. Manual choices and
  * rules always survive a reassessment.
  */
-export async function runCategorization(useAi: boolean, reassess = false): Promise<CategorizeResult> {
+export async function runCategorization(useAi: boolean, reassess = false, hid = 0): Promise<CategorizeResult> {
   if (reassess) {
     const wipe = db.transaction(() => {
-      db.prepare("DELETE FROM merchant_cache WHERE source = 'ai'").run();
+      db.prepare("DELETE FROM merchant_cache WHERE source = 'ai' AND household_id = ?").run(hid);
       db.prepare(
-        "UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE categorized_by IN ('ai', 'cache')"
-      ).run();
+        "UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE categorized_by IN ('ai', 'cache') AND household_id = ?"
+      ).run(hid);
     });
     wipe();
   }
 
   const result: CategorizeResult = {
-    byRule: applyRules(),
-    byCache: applyMerchantCache(),
+    byRule: applyRules(false, hid),
+    byCache: applyMerchantCache(hid),
     byAi: 0,
     newMerchants: 0,
     remaining: 0,
@@ -58,7 +58,7 @@ export async function runCategorization(useAi: boolean, reassess = false): Promi
 
   if (useAi && resolveLlmConfig().configured) {
     try {
-      const ai = await aiCategorizeNewMerchants();
+      const ai = await aiCategorizeNewMerchants(hid);
       result.byAi = ai.updated;
       result.newMerchants = ai.newMerchants;
       result.aiUsed = true;
@@ -68,7 +68,7 @@ export async function runCategorization(useAi: boolean, reassess = false): Promi
   }
 
   result.remaining = (
-    db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NULL").get() as {
+    db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NULL AND household_id = ?").get(hid) as {
       n: number;
     }
   ).n;
@@ -81,27 +81,27 @@ export async function runCategorization(useAi: boolean, reassess = false): Promi
  * (including manual ones — rules are explicit user intent).
  * Returns rows updated.
  */
-export function applyRules(force = false): number {
+export function applyRules(force = false, hid = 0): number {
   const rules = db
-    .prepare("SELECT id, pattern, category_id FROM rules ORDER BY length(pattern) DESC")
-    .all() as Array<{ id: number; pattern: string; category_id: number }>;
+    .prepare("SELECT id, pattern, category_id FROM rules WHERE household_id = ? ORDER BY length(pattern) DESC")
+    .all(hid) as Array<{ id: number; pattern: string; category_id: number }>;
   if (rules.length === 0) return 0;
 
   const update = db.prepare(
     force
       ? `UPDATE transactions SET category_id = ?, categorized_by = 'rule'
-         WHERE (lower(payee) LIKE ? OR lower(memo) LIKE ?)
+         WHERE household_id = ? AND (lower(payee) LIKE ? OR lower(memo) LIKE ?)
            AND (category_id IS NOT ? OR categorized_by IS NOT 'rule')`
       : `UPDATE transactions SET category_id = ?, categorized_by = 'rule'
-         WHERE category_id IS NULL AND (lower(payee) LIKE ? OR lower(memo) LIKE ?)`
+         WHERE household_id = ? AND category_id IS NULL AND (lower(payee) LIKE ? OR lower(memo) LIKE ?)`
   );
   let total = 0;
   const run = db.transaction(() => {
     for (const r of rules) {
       const like = `%${r.pattern.toLowerCase()}%`;
       total += force
-        ? update.run(r.category_id, like, like, r.category_id).changes
-        : update.run(r.category_id, like, like).changes;
+        ? update.run(r.category_id, hid, like, like, r.category_id).changes
+        : update.run(r.category_id, hid, like, like).changes;
     }
   });
   run();
@@ -109,35 +109,36 @@ export function applyRules(force = false): number {
 }
 
 /** Apply the merchant cache to uncategorized transactions. Returns rows updated. */
-export function applyMerchantCache(): number {
+export function applyMerchantCache(hid = 0): number {
   return db
     .prepare(
       `UPDATE transactions SET
-         category_id = (SELECT mc.category_id FROM merchant_cache mc WHERE mc.payee_norm = transactions.payee_norm),
+         category_id = (SELECT mc.category_id FROM merchant_cache mc WHERE mc.payee_norm = transactions.payee_norm AND mc.household_id = ?),
          categorized_by = 'cache'
-       WHERE category_id IS NULL
+       WHERE household_id = ?
+         AND category_id IS NULL
          AND payee_norm != ''
-         AND EXISTS (SELECT 1 FROM merchant_cache mc WHERE mc.payee_norm = transactions.payee_norm)`
+         AND EXISTS (SELECT 1 FROM merchant_cache mc WHERE mc.payee_norm = transactions.payee_norm AND mc.household_id = ?)`
     )
-    .run().changes;
+    .run(hid, hid, hid).changes;
 }
 
 /**
  * Remember a manual categorization so every future transaction from the same
  * merchant gets it without asking the AI again. Manual always outranks AI.
  */
-export function rememberManualChoice(payeeNorm: string, categoryId: number): void {
+export function rememberManualChoice(payeeNorm: string, categoryId: number, hid = 0): void {
   if (!payeeNorm) return;
   db.prepare(
-    `INSERT INTO merchant_cache (payee_norm, category_id, source, updated_at)
-     VALUES (?, ?, 'manual', datetime('now'))
-     ON CONFLICT(payee_norm) DO UPDATE SET category_id = excluded.category_id, source = 'manual', updated_at = datetime('now')`
-  ).run(payeeNorm, categoryId);
+    `INSERT INTO merchant_cache (household_id, payee_norm, category_id, source, updated_at)
+     VALUES (?, ?, ?, 'manual', datetime('now'))
+     ON CONFLICT(household_id, payee_norm) DO UPDATE SET category_id = excluded.category_id, source = 'manual', updated_at = datetime('now')`
+  ).run(hid, payeeNorm, categoryId);
 }
 
 const BATCH_SIZE = 80;
 
-async function aiCategorizeNewMerchants(): Promise<{ updated: number; newMerchants: number }> {
+async function aiCategorizeNewMerchants(hid: number): Promise<{ updated: number; newMerchants: number }> {
   // Distinct merchants with uncategorized transactions that the cache has never seen
   const pending = db
     .prepare(
@@ -147,19 +148,20 @@ async function aiCategorizeNewMerchants(): Promise<{ updated: number; newMerchan
               CAST(AVG(t.amount_cents) AS INTEGER) AS avg_cents,
               COUNT(*)      AS count
        FROM transactions t
-       WHERE t.category_id IS NULL
+       WHERE t.household_id = ?
+         AND t.category_id IS NULL
          AND t.payee_norm != ''
-         AND NOT EXISTS (SELECT 1 FROM merchant_cache mc WHERE mc.payee_norm = t.payee_norm)
+         AND NOT EXISTS (SELECT 1 FROM merchant_cache mc WHERE mc.payee_norm = t.payee_norm AND mc.household_id = ?)
        GROUP BY t.payee_norm
        ORDER BY count DESC`
     )
-    .all() as PayeeSample[];
+    .all(hid, hid) as PayeeSample[];
 
   if (pending.length === 0) return { updated: 0, newMerchants: 0 };
 
   const categories = db
-    .prepare("SELECT id, name, grp, kind FROM categories ORDER BY grp, name")
-    .all() as CategoryRow[];
+    .prepare("SELECT id, name, grp, kind FROM categories WHERE household_id = ? ORDER BY grp, name")
+    .all(hid) as CategoryRow[];
   const byName = new Map(categories.map((c) => [c.name.toLowerCase(), c]));
 
   let updated = 0;
@@ -170,22 +172,22 @@ async function aiCategorizeNewMerchants(): Promise<{ updated: number; newMerchan
     const assignments = await classifyBatch(categories, batch);
 
     const upsertCache = db.prepare(
-      `INSERT INTO merchant_cache (payee_norm, category_id, source, updated_at)
-       VALUES (?, ?, 'ai', datetime('now'))
-       ON CONFLICT(payee_norm) DO NOTHING`
+      `INSERT INTO merchant_cache (household_id, payee_norm, category_id, source, updated_at)
+       VALUES (?, ?, ?, 'ai', datetime('now'))
+       ON CONFLICT(household_id, payee_norm) DO NOTHING`
     );
     const updateTxns = db.prepare(
       `UPDATE transactions SET category_id = ?, categorized_by = 'ai'
-       WHERE category_id IS NULL AND payee_norm = ?`
+       WHERE household_id = ? AND category_id IS NULL AND payee_norm = ?`
     );
 
     const apply = db.transaction(() => {
       for (const a of assignments) {
         const cat = byName.get(a.category.toLowerCase());
         if (!cat) continue; // model returned an unknown category name — leave uncategorized
-        upsertCache.run(a.payee_norm, cat.id);
+        upsertCache.run(hid, a.payee_norm, cat.id);
         newMerchants++;
-        updated += updateTxns.run(cat.id, a.payee_norm).changes;
+        updated += updateTxns.run(cat.id, hid, a.payee_norm).changes;
       }
     });
     apply();

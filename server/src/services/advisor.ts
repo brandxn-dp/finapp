@@ -16,20 +16,20 @@ export const DISCLAIMER =
  * No raw transactions or account numbers are sent — just monthly totals,
  * category aggregates, debt summaries, and recurring-payment patterns.
  */
-export async function generateInsights(): Promise<{ markdown: string; disclaimer: string }> {
+export async function generateInsights(hid: number): Promise<{ markdown: string; disclaimer: string }> {
   if (!resolveLlmConfig().configured) {
     throw new Error("AI is not configured — add an Anthropic API key or an Ollama model in Settings.");
   }
 
-  const cashflow = monthlyCashflow(6);
-  const ftt = fiftyThirtyTwenty(3);
-  const ef = emergencyFund();
-  const recurring = detectRecurring().slice(0, 15);
+  const cashflow = monthlyCashflow(6, hid);
+  const ftt = fiftyThirtyTwenty(3, hid);
+  const ef = emergencyFund(hid);
+  const recurring = detectRecurring(hid).slice(0, 15);
   const nowMonth = new Date().toISOString().slice(0, 7);
-  const topCategories = spendingByCategory(nowMonth).slice(0, 10);
+  const topCategories = spendingByCategory(nowMonth, hid).slice(0, 10);
   const debts = db
-    .prepare("SELECT name, balance_cents, apr, min_payment_cents FROM debts ORDER BY apr DESC")
-    .all() as Array<{ name: string; balance_cents: number; apr: number; min_payment_cents: number }>;
+    .prepare("SELECT name, balance_cents, apr, min_payment_cents FROM debts WHERE household_id = ? ORDER BY apr DESC")
+    .all(hid) as Array<{ name: string; balance_cents: number; apr: number; min_payment_cents: number }>;
 
   const fmt = (c: number) => `$${(c / 100).toFixed(2)}`;
   const summary = [

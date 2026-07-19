@@ -30,7 +30,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       limit?: string;
       offset?: string;
     };
-    const where: string[] = [];
+    const hid = req.householdId!;
+    const where: string[] = [`t.household_id = ${hid}`];
     const params: unknown[] = [];
 
     if (q.month) {
@@ -144,7 +145,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
    *    (catches re-linked banks that came back as new accounts)
    * Groups are for human review, never auto-deleted.
    */
-  app.get("/api/transactions/duplicates", async () => {
+  app.get("/api/transactions/duplicates", async (req) => {
+    const hid = req.householdId!;
     const pairs = db
       .prepare(
         `SELECT t1.id AS id1, t2.id AS id2,
@@ -159,6 +161,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
           AND abs(julianday(t1.date) - julianday(t2.date)) <= 3
           AND substr(t1.payee_norm, 1, 4) = substr(t2.payee_norm, 1, 4)
          WHERE t1.amount_cents != 0 AND t1.payee_norm != ''
+           AND t1.household_id = ${hid} AND t2.household_id = ${hid}
          LIMIT 5000`
       )
       .all() as Array<{
@@ -232,6 +235,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/api/transactions/:id", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
     const b = req.body as {
       category_id?: number | null;
@@ -240,7 +244,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       date?: string;
       amount_cents?: number;
     };
-    const txn = db.prepare("SELECT * FROM transactions WHERE id = ?").get(id) as
+    const txn = db.prepare("SELECT * FROM transactions WHERE id = ? AND household_id = ?").get(id, hid) as
       | { id: number; payee_norm: string }
       | undefined;
     if (!txn) return reply.code(404).send({ error: "Transaction not found." });
@@ -259,14 +263,14 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       if (b.category_id === null) {
         db.prepare("UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE id = ?").run(id);
       } else {
-        const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(b.category_id);
+        const cat = db.prepare("SELECT id FROM categories WHERE id = ? AND household_id = ?").get(b.category_id, hid);
         if (!cat) return reply.code(400).send({ error: "Unknown category." });
         db.prepare("UPDATE transactions SET category_id = ?, categorized_by = 'manual' WHERE id = ?").run(
           b.category_id,
           id
         );
         // Teach the merchant cache so this choice sticks for future imports
-        rememberManualChoice(txn.payee_norm, b.category_id);
+        rememberManualChoice(txn.payee_norm, b.category_id, hid);
       }
     }
     if (typeof b.memo === "string") {
@@ -292,13 +296,13 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
    * be listed and restored) and tombstone its identity (so re-syncs and
    * re-imports can't resurrect it).
    */
-  const trashOne = db.transaction((id: number): boolean => {
+  const trashOne = db.transaction((id: number, hid: number): boolean => {
     const txn = db
       .prepare(
         `SELECT t.*, a.name AS account_name FROM transactions t
-         JOIN accounts a ON a.id = t.account_id WHERE t.id = ?`
+         JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND t.household_id = ?`
       )
-      .get(id) as
+      .get(id, hid) as
       | {
           id: number;
           account_id: number;
@@ -314,8 +318,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       | undefined;
     if (!txn) return false;
     db.prepare(
-      `INSERT INTO deleted_txns (account_id, external_id, import_hash, date, amount_cents, payee, memo, category_id, account_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO deleted_txns (account_id, external_id, import_hash, date, amount_cents, payee, memo, category_id, account_name, household_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       txn.account_id,
       txn.external_id,
@@ -325,7 +329,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       txn.payee,
       txn.memo,
       txn.category_id,
-      txn.account_name
+      txn.account_name,
+      hid
     );
     db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
     return true;
@@ -333,35 +338,36 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
   app.delete("/api/transactions/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    if (!trashOne(id)) return reply.code(404).send({ error: "Transaction not found." });
+    if (!trashOne(id, req.householdId!)) return reply.code(404).send({ error: "Transaction not found." });
     return { ok: true };
   });
 
   /** Set the same category on many transactions at once; also teaches the merchant cache. */
   app.post("/api/transactions/bulk-categorize", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { ids?: number[]; category_id?: number | null };
     if (!Array.isArray(b?.ids) || b.ids.length === 0) {
       return reply.code(400).send({ error: "ids array is required." });
     }
     const catId = b.category_id ?? null;
     if (catId !== null) {
-      const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(catId);
+      const cat = db.prepare("SELECT id FROM categories WHERE id = ? AND household_id = ?").get(catId, hid);
       if (!cat) return reply.code(400).send({ error: "Unknown category." });
     }
     const ids = b.ids.filter((id) => Number.isInteger(id));
     const setCat = db.prepare(
       catId === null
-        ? "UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE id = ?"
-        : "UPDATE transactions SET category_id = ?, categorized_by = 'manual' WHERE id = ?"
+        ? "UPDATE transactions SET category_id = NULL, categorized_by = NULL WHERE id = ? AND household_id = ?"
+        : "UPDATE transactions SET category_id = ?, categorized_by = 'manual' WHERE id = ? AND household_id = ?"
     );
     const getNorm = db.prepare("SELECT payee_norm FROM transactions WHERE id = ?");
     let updated = 0;
     const run = db.transaction(() => {
       for (const id of ids) {
-        const changed = catId === null ? setCat.run(id).changes : setCat.run(catId, id).changes;
+        const changed = catId === null ? setCat.run(id, hid).changes : setCat.run(catId, id, hid).changes;
         if (changed && catId !== null) {
           const row = getNorm.get(id) as { payee_norm: string } | undefined;
-          if (row?.payee_norm) rememberManualChoice(row.payee_norm, catId);
+          if (row?.payee_norm) rememberManualChoice(row.payee_norm, catId, hid);
         }
         updated += changed;
       }
@@ -372,28 +378,30 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
   /** Reassign selected transactions to a different account. */
   app.post("/api/transactions/move-account", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { ids?: number[]; account_id?: number };
     if (!Array.isArray(b?.ids) || b.ids.length === 0) {
       return reply.code(400).send({ error: "ids array is required." });
     }
     const acctId = Number(b?.account_id);
     if (!Number.isInteger(acctId)) return reply.code(400).send({ error: "account_id is required." });
-    if (!db.prepare("SELECT id FROM accounts WHERE id = ?").get(acctId)) {
+    if (!db.prepare("SELECT id FROM accounts WHERE id = ? AND household_id = ?").get(acctId, hid)) {
       return reply.code(404).send({ error: "Target account not found." });
     }
     const ids = b.ids.filter((id) => Number.isInteger(id));
     // OR IGNORE: a synced txn whose external_id already exists in the target is
-    // skipped rather than crashing the whole move.
-    const move = db.prepare("UPDATE OR IGNORE transactions SET account_id = ? WHERE id = ?");
+    // skipped rather than crashing the whole move. Scoped to this household.
+    const move = db.prepare("UPDATE OR IGNORE transactions SET account_id = ? WHERE id = ? AND household_id = ?");
     let moved = 0;
     const run = db.transaction(() => {
-      for (const id of ids) moved += move.run(acctId, id).changes;
+      for (const id of ids) moved += move.run(acctId, id, hid).changes;
     });
     run();
     return { moved, skipped: ids.length - moved };
   });
 
   app.post("/api/transactions/bulk-delete", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { ids?: number[] };
     if (!Array.isArray(b?.ids) || b.ids.length === 0) {
       return reply.code(400).send({ error: "ids array is required." });
@@ -401,29 +409,30 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     if (b.ids.length > 2000) return reply.code(400).send({ error: "Too many at once (max 2,000)." });
     let deleted = 0;
     for (const id of b.ids) {
-      if (Number.isInteger(id) && trashOne(id)) deleted++;
+      if (Number.isInteger(id) && trashOne(id, hid)) deleted++;
     }
     return { deleted };
   });
 
   // ----- Trash bin -----
 
-  app.get("/api/trash", async () => {
+  app.get("/api/trash", async (req) => {
     return db
       .prepare(
         `SELECT rowid AS id, account_id, account_name, date, amount_cents, payee, memo, deleted_at,
                 external_id IS NOT NULL AS from_sync
          FROM deleted_txns
-         WHERE date IS NOT NULL AND deleted_account_ref IS NULL
+         WHERE date IS NOT NULL AND deleted_account_ref IS NULL AND household_id = ?
          ORDER BY deleted_at DESC, rowid DESC
          LIMIT 500`
       )
-      .all();
+      .all(req.householdId!);
   });
 
   app.post("/api/trash/:id/restore", async (req, reply) => {
+    const hid = req.householdId!;
     const id = Number((req.params as { id: string }).id);
-    const row = db.prepare("SELECT rowid AS id, * FROM deleted_txns WHERE rowid = ?").get(id) as
+    const row = db.prepare("SELECT rowid AS id, * FROM deleted_txns WHERE rowid = ? AND household_id = ?").get(id, hid) as
       | {
           id: number;
           account_id: number;
@@ -439,15 +448,15 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     if (!row || row.date === null || row.amount_cents === null) {
       return reply.code(404).send({ error: "Not restorable (deleted before the trash bin existed)." });
     }
-    const account = db.prepare("SELECT id FROM accounts WHERE id = ?").get(row.account_id);
+    const account = db.prepare("SELECT id FROM accounts WHERE id = ? AND household_id = ?").get(row.account_id, hid);
     if (!account) return reply.code(400).send({ error: "The account this belonged to no longer exists." });
     const category = row.category_id
-      ? db.prepare("SELECT id FROM categories WHERE id = ?").get(row.category_id)
+      ? db.prepare("SELECT id FROM categories WHERE id = ? AND household_id = ?").get(row.category_id, hid)
       : null;
     const run = db.transaction(() => {
       db.prepare(
-        `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, category_id, external_id, import_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, category_id, external_id, import_hash, household_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         row.account_id,
         row.date,
@@ -457,7 +466,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         row.memo ?? "",
         category ? row.category_id : null,
         row.external_id,
-        row.import_hash
+        row.import_hash,
+        hid
       );
       db.prepare("DELETE FROM deleted_txns WHERE rowid = ?").run(id);
     });
@@ -475,10 +485,11 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       invert_amounts?: boolean;
       rows?: Array<{ date: string; amount: string | number; payee?: string; memo?: string }>;
     };
+    const hid = req.householdId!;
     if (!b?.account_id || !Array.isArray(b.rows)) {
       return reply.code(400).send({ error: "account_id and rows are required." });
     }
-    const account = db.prepare("SELECT id FROM accounts WHERE id = ?").get(b.account_id);
+    const account = db.prepare("SELECT id FROM accounts WHERE id = ? AND household_id = ?").get(b.account_id, hid);
     if (!account) return reply.code(400).send({ error: "Unknown account." });
     if (b.rows.length > 20000) {
       return reply.code(400).send({ error: "Too many rows in one import (max 20,000)." });
@@ -487,8 +498,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     const exists = db.prepare("SELECT 1 FROM transactions WHERE account_id = ? AND import_hash = ?");
     const tombstoned = db.prepare("SELECT 1 FROM deleted_txns WHERE account_id = ? AND import_hash = ?");
     const insert = db.prepare(
-      `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, import_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO transactions (account_id, date, amount_cents, payee, payee_norm, memo, import_hash, household_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     let imported = 0;
@@ -512,13 +523,13 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
           continue;
         }
         seenInBatch.add(hash);
-        insert.run(b.account_id, date, amount, payee, normalizePayee(payee), (row.memo ?? "").trim(), hash);
+        insert.run(b.account_id, date, amount, payee, normalizePayee(payee), (row.memo ?? "").trim(), hash, hid);
         imported++;
       }
     });
     run();
 
-    const autoCategorized = imported > 0 ? applyRules() + applyMerchantCache() : 0;
+    const autoCategorized = imported > 0 ? applyRules(false, hid) + applyMerchantCache(hid) : 0;
     return { imported, duplicates, invalid, autoCategorized };
   });
 }

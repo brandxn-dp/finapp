@@ -13,43 +13,45 @@ import { generateInsights, DISCLAIMER } from "../services/advisor.js";
 
 export function registerInsightRoutes(app: FastifyInstance): void {
   app.get("/api/insights/overview", async (req) => {
+    const hid = req.householdId!;
     const q = req.query as { months?: string };
     const months = Math.min(Number(q.months ?? 6) || 6, 24);
     const nowMonth = new Date().toISOString().slice(0, 7);
 
     const netWorth = db
-      .prepare("SELECT COALESCE(SUM(balance_cents), 0) AS total FROM accounts WHERE archived = 0")
-      .get() as { total: number };
+      .prepare("SELECT COALESCE(SUM(balance_cents), 0) AS total FROM accounts WHERE archived = 0 AND household_id = ?")
+      .get(hid) as { total: number };
     const txnStats = db
       .prepare(
         `SELECT COUNT(*) AS total,
                 SUM(CASE WHEN category_id IS NULL THEN 1 ELSE 0 END) AS uncategorized
-         FROM transactions`
+         FROM transactions WHERE household_id = ?`
       )
-      .get() as { total: number; uncategorized: number };
+      .get(hid) as { total: number; uncategorized: number };
 
     return {
       month: nowMonth,
       net_worth_cents: netWorth.total,
       transactions: txnStats.total,
       uncategorized: txnStats.uncategorized ?? 0,
-      cashflow: monthlyCashflow(months),
-      spending: spendingByCategory(nowMonth),
-      fifty_thirty_twenty: fiftyThirtyTwenty(3),
-      emergency_fund: emergencyFund()
+      cashflow: monthlyCashflow(months, hid),
+      spending: spendingByCategory(nowMonth, hid),
+      fifty_thirty_twenty: fiftyThirtyTwenty(3, hid),
+      emergency_fund: emergencyFund(hid)
     };
   });
 
   app.get("/api/insights/spending", async (req) => {
+    const hid = req.householdId!;
     const q = req.query as { month?: string };
     const month = /^\d{4}-\d{2}$/.test(q.month ?? "")
       ? q.month!
       : new Date().toISOString().slice(0, 7);
-    return { month, spending: spendingByCategory(month) };
+    return { month, spending: spendingByCategory(month, hid) };
   });
 
-  app.get("/api/insights/recurring", async () => {
-    const items = detectRecurring();
+  app.get("/api/insights/recurring", async (req) => {
+    const items = detectRecurring(req.householdId!);
     const monthlyTotal = items
       .filter((r) => !r.ignored)
       .reduce((sum, r) => {
@@ -66,27 +68,28 @@ export function registerInsightRoutes(app: FastifyInstance): void {
 
   /** Mark a detected recurring merchant as "not actually a bill" (or restore it). */
   app.put("/api/recurring/override", async (req, reply) => {
+    const hid = req.householdId!;
     const b = req.body as { payee_norm?: string; ignored?: boolean };
     if (!b?.payee_norm) return reply.code(400).send({ error: "payee_norm is required." });
     if (b.ignored) {
       db.prepare(
-        `INSERT INTO recurring_overrides (payee_norm, status) VALUES (?, 'ignored')
-         ON CONFLICT(payee_norm) DO UPDATE SET status = 'ignored'`
-      ).run(b.payee_norm);
+        `INSERT INTO recurring_overrides (household_id, payee_norm, status) VALUES (?, ?, 'ignored')
+         ON CONFLICT(household_id, payee_norm) DO UPDATE SET status = 'ignored'`
+      ).run(hid, b.payee_norm);
     } else {
-      db.prepare("DELETE FROM recurring_overrides WHERE payee_norm = ?").run(b.payee_norm);
+      db.prepare("DELETE FROM recurring_overrides WHERE payee_norm = ? AND household_id = ?").run(b.payee_norm, hid);
     }
     return { ok: true };
   });
 
-  app.get("/api/insights/budget-suggestions", async () => {
-    return { suggestions: suggestBudgets() };
+  app.get("/api/insights/budget-suggestions", async (req) => {
+    return { suggestions: suggestBudgets(req.householdId!) };
   });
 
   /** AI-written monthly check-in (aggregates only — no raw transactions leave the box). */
-  app.post("/api/insights/advise", async (_req, reply) => {
+  app.post("/api/insights/advise", async (req, reply) => {
     try {
-      return await generateInsights();
+      return await generateInsights(req.householdId!);
     } catch (err) {
       return reply.code(400).send({
         error: err instanceof Error ? err.message : String(err),
@@ -103,13 +106,13 @@ export function registerInsightRoutes(app: FastifyInstance): void {
    */
   app.post("/api/categorize/run", async (req) => {
     const b = (req.body ?? {}) as { use_ai?: boolean; reassess?: boolean };
-    return runCategorization(b.use_ai !== false, b.reassess === true);
+    return runCategorization(b.use_ai !== false, b.reassess === true, req.householdId!);
   });
 
   /** Re-apply rules; force=true overrides existing categories (rules always win). */
   app.post("/api/categorize/apply-rules", async (req) => {
     const b = (req.body ?? {}) as { force?: boolean };
-    const applied = applyRules(b.force === true);
+    const applied = applyRules(b.force === true, req.householdId!);
     return { applied, force: b.force === true };
   });
 }

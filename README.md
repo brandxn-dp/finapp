@@ -73,6 +73,33 @@ FinApp has **no built-in login** — it is designed for a trusted home LAN. Do n
 2. **SimpleFIN**: Settings → *Bank sync* → paste a setup token. After that, *Sync now* pulls new transactions (only settled ones) any time.
 3. Hit **Auto-categorize** on the Transactions page. Rules and remembered merchants run free and instantly; anything new goes to Claude in one batch.
 
+## Accounts, households & security
+
+FinApp requires a login. Each **user** has private data; a **household** is a
+shared workspace. A solo household is just your own private finances; invite
+someone to a household and you both see (and edit) the same accounts,
+transactions, budgets and debts. One user can belong to several households
+(e.g. personal + a rental property) and switch between them from the sidebar.
+
+- **First run / upgrading:** the first account you create becomes the owner. If
+  you already had data (from before logins existed), a banner offers to **move
+  your existing data into your household** — click it once and everything is
+  yours. Nobody else can claim it.
+- **Inviting:** Settings → *Household* → *Create invite link*. Send the link to
+  someone who has an account; it's single-use and expires in 7 days.
+- **Passwords** are hashed with scrypt; sessions are httpOnly cookies. Failed
+  logins are rate-limited and locked out temporarily.
+- **Registration:** open by default. Set `REGISTRATION_INVITE_ONLY=1` to stop
+  new people from self-registering (existing users can still be invited to
+  households).
+
+> **Exposing to the internet:** put FinApp behind HTTPS (a reverse proxy such as
+> Nginx Proxy Manager, Caddy, or Cloudflare Tunnel). The session cookie is
+> marked `Secure` automatically when it detects HTTPS. Auth here covers logins,
+> hashing, and lockouts, but there is no email verification or 2FA yet — for a
+> finance app on the open internet, also gating it behind your proxy's own auth
+> (or a VPN like Tailscale) is strongly recommended.
+
 ## Development
 
 ```bash

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import Papa from "papaparse";
 import { api, useApi } from "../lib/api";
@@ -749,25 +750,30 @@ function FilterSidebar({
         </Card>
       </aside>
 
-      {/* Mobile: slide-over */}
-      {open && (
-        <div className="fixed inset-0 z-50 flex lg:hidden" onMouseDown={onClose}>
-          <div className="absolute inset-0 bg-black/45 backdrop-blur-[3px]" />
-          <div
-            className="relative ml-auto h-full w-80 max-w-[85vw] overflow-y-auto border-l border-line bg-surface p-5 shadow-2xl"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-display smallcaps text-[16px] font-semibold text-ink">Filter &amp; sort</h2>
-              <button className="rounded-md p-1 text-ink3 hover:bg-surface2 hover:text-ink" onClick={onClose}>
-                <Icon name="x" size={16} />
-              </button>
+      {/* Mobile: slide-over. Portaled to <body> so its z-50 sits above the
+          fixed bottom nav — otherwise it's trapped inside <main>'s stacking
+          context (which the nav renders over), hiding the "Show results" button. */}
+      {open &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex lg:hidden" onMouseDown={onClose}>
+            <div className="absolute inset-0 bg-black/45 backdrop-blur-[3px]" />
+            <div
+              className="relative ml-auto flex h-full w-80 max-w-[85vw] flex-col overflow-y-auto border-l border-line bg-surface p-5 shadow-2xl"
+              style={{ paddingBottom: "calc(5rem + env(safe-area-inset-bottom))" }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="font-display smallcaps text-[16px] font-semibold text-ink">Filter &amp; sort</h2>
+                <button className="rounded-md p-1 text-ink3 hover:bg-surface2 hover:text-ink" onClick={onClose}>
+                  <Icon name="x" size={16} />
+                </button>
+              </div>
+              {body}
+              <Button className="mt-4 w-full" onClick={onClose}>Show results</Button>
             </div>
-            {body}
-            <Button className="mt-4 w-full" onClick={onClose}>Show results</Button>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </>
   );
 }

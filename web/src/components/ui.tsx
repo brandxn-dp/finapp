@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from "react";
 
 // ---------------- Icons (inline, stroke-based) ----------------
@@ -318,8 +319,15 @@ export function Modal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
-    <div className="modal-overlay fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[8vh] backdrop-blur-[5px]" onMouseDown={onClose}>
+  // Portal to <body> so z-50 clears the fixed bottom nav on mobile (otherwise
+  // the modal is trapped in <main>'s stacking context and the nav covers its
+  // footer buttons). Extra bottom padding keeps controls above the nav.
+  return createPortal(
+    <div
+      className="modal-overlay fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[8vh] backdrop-blur-[5px]"
+      style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom))" }}
+      onMouseDown={onClose}
+    >
       <div
         className={`card-skeu w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-[14px] border border-line bg-[var(--glass)] shadow-2xl outline outline-1 outline-line/60 outline-offset-[-5px] backdrop-blur-2xl`}
         onMouseDown={(e) => e.stopPropagation()}
@@ -332,7 +340,8 @@ export function Modal({
         </header>
         <div className="px-5 py-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

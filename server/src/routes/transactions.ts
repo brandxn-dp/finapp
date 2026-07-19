@@ -370,6 +370,29 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     return { updated };
   });
 
+  /** Reassign selected transactions to a different account. */
+  app.post("/api/transactions/move-account", async (req, reply) => {
+    const b = req.body as { ids?: number[]; account_id?: number };
+    if (!Array.isArray(b?.ids) || b.ids.length === 0) {
+      return reply.code(400).send({ error: "ids array is required." });
+    }
+    const acctId = Number(b?.account_id);
+    if (!Number.isInteger(acctId)) return reply.code(400).send({ error: "account_id is required." });
+    if (!db.prepare("SELECT id FROM accounts WHERE id = ?").get(acctId)) {
+      return reply.code(404).send({ error: "Target account not found." });
+    }
+    const ids = b.ids.filter((id) => Number.isInteger(id));
+    // OR IGNORE: a synced txn whose external_id already exists in the target is
+    // skipped rather than crashing the whole move.
+    const move = db.prepare("UPDATE OR IGNORE transactions SET account_id = ? WHERE id = ?");
+    let moved = 0;
+    const run = db.transaction(() => {
+      for (const id of ids) moved += move.run(acctId, id).changes;
+    });
+    run();
+    return { moved, skipped: ids.length - moved };
+  });
+
   app.post("/api/transactions/bulk-delete", async (req, reply) => {
     const b = req.body as { ids?: number[] };
     if (!Array.isArray(b?.ids) || b.ids.length === 0) {

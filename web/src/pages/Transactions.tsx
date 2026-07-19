@@ -160,6 +160,25 @@ export default function Transactions() {
     });
   };
 
+  const bulkMove = async (acctId: string) => {
+    if (selected.size === 0 || acctId === "") return;
+    try {
+      const r = await api.post<{ moved: number; skipped: number }>("/api/transactions/move-account", {
+        ids: [...selected],
+        account_id: Number(acctId)
+      });
+      toast(
+        `Moved ${r.moved} transactions.${r.skipped ? ` ${r.skipped} skipped (already in that account).` : ""}`,
+        "good"
+      );
+      setSelected(new Set());
+      refetch();
+      refetchAccounts();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    }
+  };
+
   const bulkDelete = async () => {
     if (selected.size === 0) return;
     if (!window.confirm(`Move ${selected.size} transactions to the trash? You can restore them from Settings → Trash.`)) return;
@@ -345,6 +364,17 @@ export default function Transactions() {
                     <option value="">— uncategorized —</option>
                     {categories?.map((c) => (
                       <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                    ))}
+                  </Select>
+                  <Select
+                    value=""
+                    onChange={(e) => bulkMove(e.target.value)}
+                    className="!h-8 !text-xs"
+                    title={`Move ${selected.size} selected to another account`}
+                  >
+                    <option value="" disabled>Move {selected.size} to account…</option>
+                    {accounts?.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
                     ))}
                   </Select>
                   <Button variant="danger" size="sm" onClick={bulkDelete}>

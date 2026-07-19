@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
+import { api, useApi } from "../lib/api";
+import type { Settings as AppSettings } from "../lib/api";
 import { useTheme } from "../lib/theme";
 import { Icon } from "./ui";
 
@@ -72,6 +74,52 @@ function AcanthusCorner() {
   );
 }
 
+/**
+ * Reminder to move imported transactions into the accounts you actually want.
+ * Shows on every app open until the user marks organizing finished; an ✕ hides
+ * it for the current session only.
+ */
+function OrganizeBanner() {
+  const { data: settings, refetch } = useApi<AppSettings>("/api/settings");
+  const [hidden, setHidden] = useState(false);
+
+  if (hidden || !settings || settings.accounts_organized) return null;
+
+  const finish = async () => {
+    try {
+      await api.put("/api/settings", { accounts_organized: true });
+      refetch();
+    } catch {
+      /* non-critical — banner just stays */
+    }
+  };
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-[14px] border border-accent/30 bg-accent-soft/60 px-4 py-3 text-sm">
+      <Icon name="wallet" size={18} className="shrink-0 text-accent" />
+      <div className="min-w-0 flex-1">
+        <span className="font-medium text-ink">Organize your transactions into accounts.</span>{" "}
+        <span className="text-ink2">
+          Select transactions and use “Move to account,” or merge accounts in Settings, so everything sits under the
+          account names you want.
+        </span>
+      </div>
+      <Link
+        to="/transactions"
+        className="btn-emboss inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-accent-fg hover:brightness-108"
+      >
+        Move transactions
+      </Link>
+      <button onClick={finish} className="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:bg-surface2">
+        Finished organizing
+      </button>
+      <button onClick={() => setHidden(true)} className="rounded-md p-1 text-ink3 hover:text-ink" title="Hide until next time">
+        <Icon name="x" size={15} />
+      </button>
+    </div>
+  );
+}
+
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finapp-nav-collapsed") === "1");
   const toggleCollapsed = () =>
@@ -124,6 +172,7 @@ export default function Layout() {
       {/* Main */}
       <main className="z-10 min-w-0 flex-1 overflow-y-auto pb-20 md:pb-0">
         <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
+          <OrganizeBanner />
           <Outlet />
         </div>
       </main>

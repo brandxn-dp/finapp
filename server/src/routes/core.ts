@@ -138,6 +138,38 @@ export function registerCoreRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
+  /**
+   * Merge one account into another: move its transactions to the target, fold in
+   * its balance, then trash the now-empty source (restorable). Transactions that
+   * would collide on (account_id, external_id) are left behind and go to the
+   * trash with the source — they're already present in the target.
+   */
+  app.post("/api/accounts/:id/merge", async (req, reply) => {
+    const sourceId = Number((req.params as { id: string }).id);
+    const into = Number((req.body as { into?: number })?.into);
+    if (!Number.isInteger(into)) return reply.code(400).send({ error: "Target account (into) is required." });
+    if (into === sourceId) return reply.code(400).send({ error: "Can't merge an account into itself." });
+    const source = db.prepare("SELECT * FROM accounts WHERE id = ?").get(sourceId) as
+      | { id: number; balance_cents: number }
+      | undefined;
+    const target = db.prepare("SELECT id FROM accounts WHERE id = ?").get(into);
+    if (!source || !target) return reply.code(404).send({ error: "Account not found." });
+
+    const run = db.transaction(() => {
+      const moved = db
+        .prepare("UPDATE OR IGNORE transactions SET account_id = ? WHERE account_id = ?")
+        .run(into, sourceId).changes;
+      db.prepare("UPDATE accounts SET balance_cents = balance_cents + ? WHERE id = ?").run(
+        source.balance_cents,
+        into
+      );
+      trashAccount(sourceId); // snapshots any leftover colliding txns, then removes the source
+      return moved;
+    });
+    const moved = run();
+    return { ok: true, moved };
+  });
+
   app.post("/api/accounts/bulk-delete", async (req, reply) => {
     const b = req.body as { ids?: number[] };
     if (!Array.isArray(b?.ids) || b.ids.length === 0) {
@@ -478,7 +510,9 @@ export function registerCoreRoutes(app: FastifyInstance): void {
       simplefin_connected: isConnected(),
       simplefin_last_sync: lastSync(),
       currency: getSetting("currency") ?? "USD",
-      include_credit: getSetting("include_credit") === "1"
+      include_credit: getSetting("include_credit") === "1",
+      // Dismissed once the user says they've organized transactions into accounts.
+      accounts_organized: getSetting("accounts_organized") === "1"
     };
   };
 
@@ -495,6 +529,9 @@ export function registerCoreRoutes(app: FastifyInstance): void {
     };
     if (b.include_credit !== undefined) {
       setSetting("include_credit", b.include_credit ? "1" : "0");
+    }
+    if ((b as { accounts_organized?: boolean }).accounts_organized !== undefined) {
+      setSetting("accounts_organized", (b as { accounts_organized?: boolean }).accounts_organized ? "1" : "0");
     }
     if (b.ai_provider !== undefined) {
       if (b.ai_provider !== "anthropic" && b.ai_provider !== "ollama") {

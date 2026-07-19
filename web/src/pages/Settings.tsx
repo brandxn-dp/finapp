@@ -4,7 +4,7 @@ import type { Account, Category, DeletedAccount, Rule, Settings as AppSettings, 
 import { money, shortDate } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import type { Theme } from "../lib/theme";
-import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
+import { Button, Card, Icon, Input, Modal, PageHeader, Select, Spinner, useToast } from "../components/ui";
 
 const ACCOUNT_TYPES = ["checking", "savings", "credit", "investment", "retirement", "loan", "cash", "other"];
 
@@ -325,6 +325,7 @@ function AccountsCard() {
   const { data: accounts, refetch } = useApi<Account[]>("/api/accounts");
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [merging, setMerging] = useState<Account | null>(null);
   const { toast } = useToast();
 
   const add = async () => {
@@ -441,6 +442,14 @@ function AccountsCard() {
               ))}
             </Select>
             <BalanceEditor account={a} onSave={(cents) => update(a.id, { balance_cents: cents })} />
+            <button
+              className="p-1 text-ink3 hover:text-accent disabled:opacity-30"
+              onClick={() => setMerging(a)}
+              disabled={(accounts?.length ?? 0) < 2}
+              title="Merge this account's transactions into another"
+            >
+              <Icon name="link" size={14} />
+            </button>
             <button className="p-1 text-ink3 hover:text-bad" onClick={() => remove(a)} title="Delete account">
               <Icon name="trash" size={14} />
             </button>
@@ -453,7 +462,76 @@ function AccountsCard() {
           <Icon name="plus" size={14} /> Add
         </Button>
       </div>
+      {merging && (
+        <MergeAccountModal
+          source={merging}
+          accounts={(accounts ?? []).filter((a) => a.id !== merging.id)}
+          onClose={() => setMerging(null)}
+          onDone={() => {
+            setMerging(null);
+            refetch();
+          }}
+        />
+      )}
     </Card>
+  );
+}
+
+/** Fold one account's transactions (and balance) into another. */
+function MergeAccountModal({
+  source,
+  accounts,
+  onClose,
+  onDone
+}: {
+  source: Account;
+  accounts: Account[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const [into, setInto] = useState<string>(accounts[0] ? String(accounts[0].id) : "");
+  const [busy, setBusy] = useState(false);
+
+  const merge = async () => {
+    if (!into) return;
+    setBusy(true);
+    try {
+      const r = await api.post<{ moved: number }>(`/api/accounts/${source.id}/merge`, { into: Number(into) });
+      const target = accounts.find((a) => String(a.id) === into);
+      toast(`Merged ${source.name} into ${target?.name ?? "account"} — moved ${r.moved} transactions.`, "good");
+      onDone();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Merge account" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-ink2">
+          Move all <strong>{source.txn_count}</strong> transactions from <strong>{source.name}</strong> into another
+          account and add its balance there. <strong>{source.name}</strong> then goes to the trash (restorable).
+          Use this to consolidate transactions under the account name you actually want.
+        </p>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Merge into</span>
+          <Select value={into} onChange={(e) => setInto(e.target.value)} className="w-full">
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name} ({a.txn_count} txns)</option>
+            ))}
+          </Select>
+        </label>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={merge} disabled={busy || !into}>
+            {busy ? <Spinner /> : <Icon name="link" size={14} />} Merge
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

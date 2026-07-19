@@ -21,6 +21,13 @@ export default function Budget() {
 
   const spentBy = new Map((spend?.spending ?? []).map((s) => [s.category_id, s.total_cents]));
 
+  // Totals for the footer: what's budgeted, what's been spent against it, and how
+  // far over budget you are across every category (only over-categories count).
+  const rows = budgets ?? [];
+  const totalBudgeted = rows.reduce((s, b) => s + b.monthly_cents, 0);
+  const totalSpent = rows.reduce((s, b) => s + (spentBy.get(b.category_id) ?? 0), 0);
+  const totalOver = rows.reduce((s, b) => s + Math.max(0, (spentBy.get(b.category_id) ?? 0) - b.monthly_cents), 0);
+
   const refreshAll = () => {
     refetchBudgets();
     refetchCategories();
@@ -97,10 +104,31 @@ export default function Budget() {
             ))}
           </ul>
         )}
+        {budgets && budgets.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-t border-line pt-3 text-sm">
+            <span className="text-ink2">
+              Total budgeted <span className="tnum font-semibold text-ink">{money(totalBudgeted)}</span>
+              <span className="ml-1 text-xs text-ink3">/mo</span>
+            </span>
+            <span className="text-ink2">
+              Spent so far <span className="tnum font-semibold text-ink">{money(totalSpent)}</span>
+            </span>
+            <span className={totalOver > 0 ? "font-medium text-bad" : "text-good"}>
+              {totalOver > 0 ? (
+                <>Over by <span className="tnum font-semibold">{money(totalOver)}</span> total</>
+              ) : (
+                <>Under budget everywhere</>
+              )}
+            </span>
+          </div>
+        )}
       </Card>
 
       <Card
         title="Suggested budgets"
+        collapsible
+        defaultOpen={false}
+        summary={pending.length > 0 ? `${pending.length} to review` : "all caught up"}
         action={
           <div className="flex gap-2">
             <Button
@@ -182,8 +210,8 @@ function BudgetLine({
   const c = useChartColors();
   const { toast } = useToast();
   const hasItems = row.items.length > 0;
-  // Categories broken into items start expanded so the breakdown is visible.
-  const [open, setOpen] = useState(hasItems);
+  // Folders start collapsed to keep the list compact; expand to see the breakdown.
+  const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   // A $0 budget means "spend nothing here" — any spend is over.
   const zero = row.monthly_cents === 0;

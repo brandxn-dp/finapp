@@ -236,6 +236,7 @@ export interface Settings {
   simplefin_last_sync: string | null;
   currency: string;
   include_credit: boolean;
+  accounts_organized: boolean;
 }
 
 export interface DupTxn extends Txn {

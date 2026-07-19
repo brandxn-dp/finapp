@@ -74,7 +74,7 @@ interface Member {
 }
 
 function HouseholdCard() {
-  const { me, switchHousehold, refresh } = useAuth();
+  const { me, switchHousehold, refresh, logout } = useAuth();
   const { toast } = useToast();
   const active = me?.households.find((h) => h.id === me.active_household_id);
   const [newName, setNewName] = useState("");
@@ -142,6 +142,16 @@ function HouseholdCard() {
       summary={`${active?.name ?? "—"} · ${members.length} member${members.length === 1 ? "" : "s"}`}
     >
       <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface2/40 px-3 py-2">
+          <span className="min-w-0 text-sm text-ink2">
+            Signed in as <span className="font-medium text-ink">{me.user.name || me.user.email}</span>
+            <span className="ml-1 text-xs text-ink3">({me.user.email})</span>
+          </span>
+          <Button size="sm" variant="ghost" onClick={logout}>
+            <Icon name="x" size={14} /> Sign out
+          </Button>
+        </div>
+
         {me.households.length > 1 && (
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-ink2">Active household</span>

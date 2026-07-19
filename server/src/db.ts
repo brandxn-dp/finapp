@@ -357,11 +357,27 @@ widenPayeeKey(
           SELECT id, name, type, currency, balance_cents, simplefin_id, archived, created_at, household_id FROM accounts;
         DROP TABLE accounts;
         ALTER TABLE accounts_new RENAME TO accounts;
-        CREATE UNIQUE INDEX idx_acct_hh_sfid ON accounts(household_id, simplefin_id) WHERE simplefin_id IS NOT NULL;
+        CREATE UNIQUE INDEX idx_acct_hh_sfid ON accounts(household_id, simplefin_id);
       `);
     });
     rebuild();
     db.pragma("foreign_keys = ON");
+  }
+}
+
+// The above index was originally created PARTIAL (WHERE simplefin_id IS NOT NULL).
+// SQLite only accepts a partial index as an `ON CONFLICT(...)` arbiter if the
+// conflict clause repeats the same WHERE — so the SimpleFIN sync upsert failed
+// with "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".
+// Rebuild it non-partial (composite NULLs stay distinct, so manual accounts are
+// unaffected) on any DB that still has the partial version.
+{
+  const idx = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_acct_hh_sfid'")
+    .get() as { sql: string | null } | undefined;
+  if (idx && idx.sql && /where/i.test(idx.sql)) {
+    db.exec("DROP INDEX idx_acct_hh_sfid");
+    db.exec("CREATE UNIQUE INDEX idx_acct_hh_sfid ON accounts(household_id, simplefin_id)");
   }
 }
 

@@ -6,6 +6,7 @@ export interface AuthUser {
   id: number;
   email: string;
   name: string;
+  is_admin?: boolean;
 }
 
 export interface Household {
@@ -20,6 +21,7 @@ export interface Me {
   households: Household[];
   active_household_id: number | null;
   is_first_user: boolean;
+  is_admin: boolean;
   unclaimed_count: number;
   registration_open: boolean;
 }
@@ -45,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await api.get<Me>("/api/auth/me");
       setMe(data);
     } catch {
-      setMe({ user: null, households: [], active_household_id: null, is_first_user: false, unclaimed_count: 0, registration_open: true });
+      setMe({ user: null, households: [], active_household_id: null, is_first_user: false, is_admin: false, unclaimed_count: 0, registration_open: true });
     } finally {
       setLoading(false);
     }
@@ -65,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await api.post("/api/auth/logout");
-    setMe({ user: null, households: [], active_household_id: null, is_first_user: false, unclaimed_count: 0, registration_open: true });
+    setMe({ user: null, households: [], active_household_id: null, is_first_user: false, is_admin: false, unclaimed_count: 0, registration_open: true });
   }, []);
 
   const switchHousehold = useCallback(async (id: number) => {

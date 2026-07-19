@@ -7,6 +7,7 @@ import Budget from "./pages/Budget";
 import Debts from "./pages/Debts";
 import Savings from "./pages/Savings";
 import Settings from "./pages/Settings";
+import Admin from "./pages/Admin";
 import Login from "./pages/Login";
 import Invite from "./pages/Invite";
 import { useAuth } from "./lib/auth";
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/debts" element={<Debts />} />
         <Route path="/savings" element={<Savings />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/admin" element={me.is_admin ? <Admin /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

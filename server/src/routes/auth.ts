@@ -18,6 +18,7 @@ import {
   resolveActiveHousehold,
   sessionTokenFrom,
   setActiveHousehold,
+  setAdmin,
   setSessionCookie,
   userById,
   userIdForToken,
@@ -42,10 +43,11 @@ function medata(userId: number) {
   const households = householdsForUser(userId);
   const active = resolveActiveHousehold(user);
   return {
-    user: { id: user.id, email: user.email, name: user.name },
+    user: { id: user.id, email: user.email, name: user.name, is_admin: user.is_admin === 1 },
     households,
     active_household_id: active,
     is_first_user: isFirstUser(userId),
+    is_admin: user.is_admin === 1,
     unclaimed_count: isFirstUser(userId) ? unclaimedCount() : 0
   };
 }
@@ -79,7 +81,11 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
     if (PUBLIC.has(path)) return;
     if (!req.userId) return reply.code(401).send({ error: "Not signed in." });
-    if (!req.householdId) return reply.code(403).send({ error: "No active household." });
+    // Household-management, admin, and auth routes work without an active household
+    // (a user who left/deleted all of theirs must still be able to create or join one).
+    const householdOptional =
+      path.startsWith("/api/households") || path.startsWith("/api/admin") || path.startsWith("/api/auth");
+    if (!householdOptional && !req.householdId) return reply.code(403).send({ error: "No active household." });
   });
 
   // ----- Register / login / logout / me -----
@@ -103,6 +109,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const seed = !(firstEver && hasUnclaimed);
 
     const { userId } = createUser(email, name, password, seed);
+    if (firstEver) setAdmin(userId, true); // the first account runs the instance
     const token = createSession(userId);
     setSessionCookie(req, reply, token);
     return medata(userId);

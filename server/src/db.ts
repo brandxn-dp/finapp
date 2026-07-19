@@ -230,6 +230,20 @@ const DEFAULT_CATEGORIES: Array<[name: string, grp: string, kind: string, icon: 
   }
 }
 
+// Admin flag on users (guarded). The first user is the instance admin; if an
+// install predates this column, promote the earliest user so there's always one.
+{
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  if (!cols.has("is_admin")) db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+  const anyAdmin = (db.prepare("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1").get() as { n: number }).n;
+  const anyUser = (db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n;
+  if (anyAdmin === 0 && anyUser > 0) {
+    db.prepare("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)").run();
+  }
+}
+
 // Multi-tenancy migration: every owned table gets a household_id. Existing rows
 // keep NULL (= "unclaimed") until the first user claims them into their household.
 const OWNED_TABLES = [
@@ -441,6 +455,28 @@ export function claimUnclaimedInto(householdId: number): number {
   });
   run();
   return moved;
+}
+
+/** Permanently delete a household and everything it owns (admin action). */
+export function deleteHousehold(householdId: number): void {
+  const run = db.transaction(() => {
+    for (const t of HOUSEHOLD_OWNED) db.prepare(`DELETE FROM ${t} WHERE household_id = ?`).run(householdId);
+    db.prepare("DELETE FROM household_settings WHERE household_id = ?").run(householdId);
+    db.prepare("DELETE FROM household_members WHERE household_id = ?").run(householdId);
+    db.prepare("DELETE FROM invites WHERE household_id = ?").run(householdId);
+    db.prepare("DELETE FROM households WHERE id = ?").run(householdId);
+  });
+  run();
+  db.pragma("wal_checkpoint(TRUNCATE)");
+}
+
+/** Delete households that no longer have any members (e.g. after removing a user). */
+export function purgeEmptyHouseholds(): number {
+  const empties = db
+    .prepare("SELECT id FROM households WHERE id NOT IN (SELECT DISTINCT household_id FROM household_members)")
+    .all() as Array<{ id: number }>;
+  for (const h of empties) deleteHousehold(h.id);
+  return empties.length;
 }
 
 /** Reset just one household's data (scoped factory reset) and re-seed its categories. */

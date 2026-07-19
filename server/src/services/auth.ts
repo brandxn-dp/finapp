@@ -130,6 +130,16 @@ export interface UserRow {
   name: string;
   password_hash: string;
   active_household_id: number | null;
+  is_admin: number;
+}
+
+export function isAdmin(userId: number): boolean {
+  const row = db.prepare("SELECT is_admin FROM users WHERE id = ?").get(userId) as { is_admin: number } | undefined;
+  return row?.is_admin === 1;
+}
+
+export function setAdmin(userId: number, admin: boolean): void {
+  db.prepare("UPDATE users SET is_admin = ? WHERE id = ?").run(admin ? 1 : 0, userId);
 }
 
 export function findUserByEmail(email: string): UserRow | undefined {

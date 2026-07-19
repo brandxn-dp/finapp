@@ -13,6 +13,7 @@ const NAV = [
   { to: "/savings", label: "Savings", icon: "wallet" },
   { to: "/settings", label: "Settings", icon: "sliders" }
 ];
+const ADMIN_NAV = { to: "/admin", label: "Admin", icon: "shield" };
 
 function Brand({ collapsed }: { collapsed: boolean }) {
   if (collapsed) {
@@ -168,6 +169,8 @@ function AccountBox({ collapsed }: { collapsed: boolean }) {
 }
 
 export default function Layout() {
+  const { me } = useAuth();
+  const navItems = me?.is_admin ? [...NAV, ADMIN_NAV] : NAV;
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finapp-nav-collapsed") === "1");
   const toggleCollapsed = () =>
     setCollapsed((v) => {
@@ -184,7 +187,7 @@ export default function Layout() {
       >
         <Brand collapsed={collapsed} />
         <nav className="flex-1 space-y-0.5 px-2">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -231,7 +234,7 @@ export default function Layout() {
         className="app-bottomnav fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-[var(--glass)] backdrop-blur-lg md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        {NAV.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

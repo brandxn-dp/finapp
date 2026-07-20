@@ -31,6 +31,7 @@ export default function Income() {
   const c = useChartColors();
   const [profile, setProfile] = useState<IncomeProfile | null>(null);
   const [busy, setBusy] = useState(false);
+  const [period, setPeriod] = useState<"check" | "month" | "year">("year");
 
   useEffect(() => {
     api
@@ -86,6 +87,16 @@ export default function Income() {
   const g = Math.max(1, th.grossAnnualCents);
   const seg = (v: number) => `${(v / g) * 100}%`;
 
+  // Period toggle for the breakdown: per paycheck (using the primary job's pay
+  // schedule), per month, or per year. Proportions are unchanged; only amounts scale.
+  const primaryFreq = profile.jobs[0]?.payFreq ?? "biweekly";
+  const perYear = PAY_FREQS.find((f) => f.value === primaryFreq)?.perYear ?? 26;
+  const freqLabel = PAY_FREQS.find((f) => f.value === primaryFreq)?.label.toLowerCase() ?? "";
+  const divisor = period === "year" ? 1 : period === "month" ? 12 : perYear;
+  const per = (annualCents: number) => (period === "year" ? moneyWhole(annualCents) : money(Math.round(annualCents / divisor)));
+  const periodLabel = period === "year" ? "per year" : period === "month" ? "per month" : "per paycheck";
+  const multiFreq = new Set(profile.jobs.map((j) => j.payFreq)).size > 1;
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -137,7 +148,26 @@ export default function Income() {
       </Button>
 
       {/* Breakdown */}
-      <Card title={`Where your money goes (${TAX_YEAR})`}>
+      <Card
+        title={`Where your money goes (${TAX_YEAR})`}
+        action={
+          <div className="flex gap-0.5 rounded-lg bg-surface2 p-0.5 text-xs">
+            {([
+              ["check", "Per paycheck"],
+              ["month", "Monthly"],
+              ["year", "Yearly"]
+            ] as const).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setPeriod(v)}
+                className={`rounded-md px-2 py-1 ${period === v ? "bg-accent font-medium text-accent-fg" : "text-ink2 hover:bg-surface"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        }
+      >
         <div className="mb-2 flex h-8 w-full overflow-hidden rounded-lg border border-line text-[10px] font-medium text-white">
           <Bar w={seg(th.netAnnualCents)} color={c.s1} label="Take-home" />
           <Bar w={seg(th.federalCents)} color={c.s2} label="Fed" />
@@ -147,17 +177,18 @@ export default function Income() {
         </div>
 
         <div className="grid gap-y-1.5 text-sm">
-          <Row label="Gross pay (before anything)" value={moneyWhole(th.grossAnnualCents)} bold />
-          <Row label="Federal income tax" value={`− ${moneyWhole(th.federalCents)}`} />
-          <Row label="Social Security (6.2%)" value={`− ${moneyWhole(th.socialSecurityCents)}`} />
-          <Row label="Medicare (1.45%)" value={`− ${moneyWhole(th.medicareCents)}`} />
-          <Row label={`${STATES.find((s) => s.code === profile.state)?.name} state tax`} value={`− ${moneyWhole(th.stateCents)}`} />
-          {th.preTaxAnnualCents > 0 && <Row label="Pre-tax benefits (401k, insurance…)" value={`− ${moneyWhole(th.preTaxAnnualCents)}`} />}
-          {th.postTaxAnnualCents > 0 && <Row label="Post-tax deductions" value={`− ${moneyWhole(th.postTaxAnnualCents)}`} />}
+          <Row label="Gross pay (before anything)" value={per(th.grossAnnualCents)} bold />
+          <Row label="Federal income tax" value={`− ${per(th.federalCents)}`} />
+          <Row label="Social Security (6.2%)" value={`− ${per(th.socialSecurityCents)}`} />
+          <Row label="Medicare (1.45%)" value={`− ${per(th.medicareCents)}`} />
+          <Row label={`${STATES.find((s) => s.code === profile.state)?.name} state tax`} value={`− ${per(th.stateCents)}`} />
+          {th.preTaxAnnualCents > 0 && <Row label="Pre-tax benefits (401k, insurance…)" value={`− ${per(th.preTaxAnnualCents)}`} />}
+          {th.postTaxAnnualCents > 0 && <Row label="Post-tax deductions" value={`− ${per(th.postTaxAnnualCents)}`} />}
           <div className="my-1 border-t border-line" />
-          <Row label="Take-home pay (per year)" value={moneyWhole(th.netAnnualCents)} bold accent />
+          <Row label={`Take-home pay (${periodLabel})`} value={per(th.netAnnualCents)} bold accent />
         </div>
         <p className="mt-2 text-xs text-ink3">
+          {period === "check" && (multiFreq ? "Per-paycheck amounts use your first job's pay schedule. " : `Based on your ${freqLabel} pay schedule. `)}
           That's an effective tax rate of {Math.round(th.effectiveTaxRate * 100)}% on your gross pay.
         </p>
       </Card>

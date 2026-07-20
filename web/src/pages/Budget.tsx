@@ -16,6 +16,7 @@ export default function Budget() {
   const { data: sugg, refetch: refetchSugg, loading: loadingSugg } = useApi<{ suggestions: BudgetSuggestion[] }>(
     "/api/insights/budget-suggestions"
   );
+  const { data: income } = useApi<{ net_monthly_cents: number; gross_monthly_cents: number }>("/api/income");
   const [modal, setModal] = useState<"add" | BudgetRow | null>(null);
   const { toast } = useToast();
 
@@ -82,6 +83,8 @@ export default function Budget() {
           </Button>
         }
       />
+
+      <IncomeCard netMonthly={income?.net_monthly_cents ?? 0} budgeted={totalBudgeted} />
 
       <Card title="Monthly budgets">
         {!budgets || budgets.length === 0 ? (
@@ -191,6 +194,61 @@ export default function Budget() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Income summary card — links to the full Income & take-home page. Shows the
+ * take-home the budget is measured against and what's left to budget.
+ */
+function IncomeCard({ netMonthly, budgeted }: { netMonthly: number; budgeted: number }) {
+  if (netMonthly <= 0) {
+    return (
+      <Link
+        to="/income"
+        className="card-skeu flex items-center justify-between gap-3 rounded-[14px] border border-accent/30 bg-accent-soft/40 px-5 py-4 outline outline-1 outline-line/50 outline-offset-[-5px] backdrop-blur-md transition-colors hover:bg-accent-soft/60"
+      >
+        <div className="flex items-center gap-3">
+          <Icon name="wallet" size={20} className="shrink-0 text-accent" />
+          <div>
+            <div className="font-display smallcaps text-sm font-semibold text-ink">Set up your income</div>
+            <div className="text-xs text-ink2">
+              Enter your wage and we'll work out your real take-home after taxes — then budget against it.
+            </div>
+          </div>
+        </div>
+        <Icon name="chevronDown" size={18} className="shrink-0 -rotate-90 text-ink3" />
+      </Link>
+    );
+  }
+  const left = netMonthly - budgeted;
+  return (
+    <Card
+      title="Income"
+      action={
+        <Link to="/income" className="text-xs font-medium text-accent hover:underline">
+          Edit income & taxes →
+        </Link>
+      }
+    >
+      <div className="grid grid-cols-3 gap-3 text-center">
+        <div>
+          <div className="smallcaps text-[11px] text-ink3">Take-home</div>
+          <div className="tnum font-display text-[22px] font-semibold text-ink">{money(netMonthly)}</div>
+          <div className="text-[11px] text-ink3">per month</div>
+        </div>
+        <div>
+          <div className="smallcaps text-[11px] text-ink3">Budgeted</div>
+          <div className="tnum font-display text-[22px] font-semibold text-ink">{money(budgeted)}</div>
+          <div className="text-[11px] text-ink3">per month</div>
+        </div>
+        <div>
+          <div className="smallcaps text-[11px] text-ink3">{left >= 0 ? "Left to budget" : "Over income"}</div>
+          <div className={`tnum font-display text-[22px] font-semibold ${left >= 0 ? "text-good" : "text-bad"}`}>{money(Math.abs(left))}</div>
+          <div className="text-[11px] text-ink3">per month</div>
+        </div>
+      </div>
+    </Card>
   );
 }
 

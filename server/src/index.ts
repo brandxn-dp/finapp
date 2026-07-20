@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import "./db.js"; // opens the database and runs migrations/seed
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerIncomeRoutes } from "./routes/income.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerTransactionRoutes } from "./routes/transactions.js";
 import { registerInsightRoutes } from "./routes/insights.js";
@@ -25,6 +26,7 @@ app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
 // Auth first: this installs the global guard + session resolution used by all routes.
 registerAuthRoutes(app);
 registerAdminRoutes(app);
+registerIncomeRoutes(app);
 registerCoreRoutes(app);
 registerTransactionRoutes(app);
 registerInsightRoutes(app);

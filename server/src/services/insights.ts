@@ -1,5 +1,6 @@
 import { db, getHouseholdSetting } from "../db.js";
 import { median } from "../util.js";
+import { householdNetMonthly } from "../routes/income.js";
 
 /**
  * Account types whose transactions count toward spending/income.
@@ -401,12 +402,14 @@ export function payoffAssessment(hid: number): PayoffAssessment {
       total: number;
     }
   ).total;
+  // A saved paycheck take-home (Income page) overrides transaction-derived income.
+  const netMonthly = householdNetMonthly(hid);
   const empty: PayoffAssessment = {
-    data_ok: false,
+    data_ok: netMonthly != null,
     months_sampled: 0,
-    avg_income_cents: 0,
+    avg_income_cents: netMonthly ?? 0,
     avg_spending_cents: 0,
-    leftover_cents: 0,
+    leftover_cents: netMonthly ?? 0,
     total_budget_cents: totalBudget,
     min_payments_cents: 0,
     cut_candidates: [],
@@ -427,7 +430,7 @@ export function payoffAssessment(hid: number): PayoffAssessment {
     .get(...covered) as { income: number | null; spending: number | null };
 
   const n = covered.length;
-  const income = Math.round((totals.income ?? 0) / n);
+  const income = netMonthly ?? Math.round((totals.income ?? 0) / n);
   const spending = Math.round((totals.spending ?? 0) / n);
 
   const minPayments = (
@@ -568,6 +571,9 @@ export function fireStats(hid: number): FireStats {
     avgIncome = Math.round((totals.income ?? 0) / n);
     avgSpending = Math.round((totals.spending ?? 0) / n);
   }
+  // A saved paycheck take-home (Income page) overrides transaction-derived income.
+  const netMonthly = householdNetMonthly(hid);
+  if (netMonthly != null) avgIncome = netMonthly;
 
   const balances = { checking: 0, savings: 0, cash: 0, investment: 0, retirement: 0, credit: 0, loan: 0, other: 0 };
   const rows = db

@@ -125,7 +125,20 @@ export default function Fire() {
     const nest = b ? b.savings + b.investment + b.retirement + b.cash : 0;
     return { inc, exp, nest };
   }, [data]);
-  const [ov, setOv] = useState<{ inc?: number; exp?: number; nest?: number }>({});
+  // Persist the money overrides too, so edits survive leaving and returning.
+  const [ov, setOvState] = useState<{ inc?: number; exp?: number; nest?: number }>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("finapp-fire-ov") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const setOv = (fn: (prev: typeof ov) => typeof ov) =>
+    setOvState((prev) => {
+      const next = fn(prev);
+      localStorage.setItem("finapp-fire-ov", JSON.stringify(next));
+      return next;
+    });
   const incomeCents = ov.inc ?? defaults.inc;
   const expensesCents = ov.exp ?? defaults.exp;
   const investedCents = ov.nest ?? defaults.nest;
@@ -495,7 +508,7 @@ export default function Fire() {
           <NumField label="Your age now" value={knobs.currentAge} onChange={(v) => setKnob("currentAge", v)} />
         </div>
         {(ov.inc !== undefined || ov.exp !== undefined || ov.nest !== undefined) && (
-          <button className="mt-3 text-xs text-accent hover:underline" onClick={() => setOv({})}>
+          <button className="mt-3 text-xs text-accent hover:underline" onClick={() => setOv(() => ({}))}>
             ↺ Reset to my actual figures
           </button>
         )}

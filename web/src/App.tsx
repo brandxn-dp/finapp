@@ -7,6 +7,7 @@ import Budget from "./pages/Budget";
 import Debts from "./pages/Debts";
 import Savings from "./pages/Savings";
 import Fire from "./pages/Fire";
+import Income from "./pages/Income";
 import Settings from "./pages/Settings";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/transactions" element={<Transactions />} />
         <Route path="/budget" element={<Budget />} />
+        <Route path="/income" element={<Income />} />
         <Route path="/debts" element={<Debts />} />
         <Route path="/savings" element={<Savings />} />
         <Route path="/fire" element={<Fire />} />

@@ -253,11 +253,12 @@ function SimplefinCard() {
   const sync = async () => {
     setBusy("sync");
     try {
-      const r = await api.post<{ accounts: number; newTransactions: number; autoCategorized: number }>(
+      const r = await api.post<{ accounts: number; newTransactions: number; autoCategorized: number; relinked: number }>(
         "/api/simplefin/sync"
       );
       toast(
-        `Synced ${r.accounts} accounts — ${r.newTransactions} new transactions, ${r.autoCategorized} auto-categorized.`,
+        `Synced ${r.accounts} accounts — ${r.newTransactions} new transactions, ${r.autoCategorized} auto-categorized.` +
+          (r.relinked ? ` Re-linked ${r.relinked} existing account${r.relinked === 1 ? "" : "s"} (history kept).` : ""),
         "good"
       );
       refetch();

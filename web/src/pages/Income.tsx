@@ -232,7 +232,7 @@ function JobCard({
         </label>
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-ink2">Hourly wage</span>
-          <Dollar cents={job.hourlyCents} onChange={(v) => onChange({ hourlyCents: v })} decimals />
+          <Dollar cents={job.hourlyCents} onChange={(v) => onChange({ hourlyCents: v })} />
         </label>
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-ink2">Hours per week</span>
@@ -340,18 +340,32 @@ function Mini({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
-function Dollar({ cents, onChange, small, decimals }: { cents: number; onChange: (cents: number) => void; small?: boolean; decimals?: boolean }) {
-  const shown = decimals ? (cents / 100).toString() : String(Math.round(cents / 100));
+/**
+ * Dollar input that supports decimals (e.g. an hourly wage of $28.85). Keeps the
+ * raw text you type in local state so an in-progress "28." or "28.5" isn't
+ * clobbered by re-deriving the value from cents; re-syncs if cents changes
+ * externally (e.g. when a saved profile loads).
+ */
+function Dollar({ cents, onChange, small }: { cents: number; onChange: (cents: number) => void; small?: boolean }) {
+  const fmt = (v: number) => (v === 0 ? "" : String(v / 100));
+  const [text, setText] = useState(() => fmt(cents));
+  useEffect(() => {
+    const parsed = Math.max(0, Math.round((Number(text.replace(/[^0-9.]/g, "")) || 0) * 100));
+    if (parsed !== cents) setText(fmt(cents));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cents]);
   return (
     <div className="relative">
       <span className={`pointer-events-none absolute ${small ? "left-2 top-1/2 -translate-y-1/2 text-xs" : "left-2.5 top-1/2 -translate-y-1/2 text-sm"} text-ink3`}>$</span>
       <Input
-        value={cents === 0 ? "" : shown}
+        value={text}
         placeholder="0"
         onChange={(e) => {
-          const clean = e.target.value.replace(/[^0-9.]/g, "");
-          const n = Number(clean) || 0;
-          onChange(Math.max(0, Math.round(n * 100)));
+          let clean = e.target.value.replace(/[^0-9.]/g, "");
+          const dot = clean.indexOf(".");
+          if (dot !== -1) clean = clean.slice(0, dot + 1) + clean.slice(dot + 1).replace(/\./g, ""); // keep one decimal point
+          setText(clean);
+          onChange(Math.max(0, Math.round((Number(clean) || 0) * 100)));
         }}
         inputMode="decimal"
         className={`w-full ${small ? "!h-8 pl-5 !text-xs" : "pl-6"}`}

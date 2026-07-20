@@ -6,7 +6,8 @@ import {
   detectRecurring,
   suggestBudgets,
   fiftyThirtyTwenty,
-  emergencyFund
+  emergencyFund,
+  fireStats
 } from "../services/insights.js";
 import { applyRules, runCategorization } from "../services/categorizer.js";
 import { generateInsights, DISCLAIMER } from "../services/advisor.js";
@@ -84,6 +85,11 @@ export function registerInsightRoutes(app: FastifyInstance): void {
 
   app.get("/api/insights/budget-suggestions", async (req) => {
     return { suggestions: suggestBudgets(req.householdId!) };
+  });
+
+  /** Inputs for the FIRE (financial independence) projection. */
+  app.get("/api/insights/fire", async (req) => {
+    return fireStats(req.householdId!);
   });
 
   /** AI-written monthly check-in (aggregates only — no raw transactions leave the box). */

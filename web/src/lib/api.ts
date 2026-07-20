@@ -200,6 +200,24 @@ export interface BudgetRow {
   items: BudgetItem[];
 }
 
+export interface FireStats {
+  data_ok: boolean;
+  months_sampled: number;
+  avg_income_cents: number;
+  avg_spending_cents: number;
+  balances: {
+    checking: number;
+    savings: number;
+    cash: number;
+    investment: number;
+    retirement: number;
+    credit: number;
+    loan: number;
+    other: number;
+  };
+  net_worth_cents: number;
+}
+
 export interface Debt {
   id: number;
   name: string;

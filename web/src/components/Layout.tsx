@@ -11,6 +11,7 @@ const NAV = [
   { to: "/budget", label: "Budget", icon: "target" },
   { to: "/debts", label: "Debt Planner", icon: "card" },
   { to: "/savings", label: "Savings", icon: "wallet" },
+  { to: "/fire", label: "FIRE", icon: "flame" },
   { to: "/settings", label: "Settings", icon: "sliders" }
 ];
 const ADMIN_NAV = { to: "/admin", label: "Admin", icon: "shield" };

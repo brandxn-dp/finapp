@@ -519,3 +519,75 @@ export function emergencyFund(hid: number): EmergencyFund {
     target6_cents: monthly * 6
   };
 }
+
+export interface FireStats {
+  data_ok: boolean;
+  months_sampled: number;
+  avg_income_cents: number; // monthly, income-kind categories only
+  avg_spending_cents: number; // monthly, non-transfer outflow
+  // Account balances grouped by type (all archived-excluded, this household).
+  balances: {
+    checking: number;
+    savings: number;
+    cash: number;
+    investment: number;
+    retirement: number;
+    credit: number;
+    loan: number;
+    other: number;
+  };
+  net_worth_cents: number;
+}
+
+/**
+ * The inputs a FIRE (Financial Independence, Retire Early) projection needs:
+ * a stable monthly income and spending average, and current balances split by
+ * account type so the app can tell savings/investments/retirement (the nest
+ * egg) apart from spending buffers and debt. All the FIRE math (target, years
+ * to FI, coast number) is done client-side so assumptions can be tweaked live.
+ */
+export function fireStats(hid: number): FireStats {
+  const window = recentMonths(6, true);
+  const covered = coveredMonths(window, hid);
+
+  let avgIncome = 0;
+  let avgSpending = 0;
+  const n = covered.length;
+  if (n > 0) {
+    const totals = db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN t.amount_cents > 0 AND c.kind = 'income' THEN t.amount_cents ELSE 0 END) AS income,
+           SUM(CASE WHEN t.amount_cents < 0 AND (c.kind IS NULL OR c.kind NOT IN ('transfer', 'income')) THEN -t.amount_cents ELSE 0 END) AS spending
+         FROM transactions t
+         LEFT JOIN categories c ON c.id = t.category_id
+         WHERE substr(t.date, 1, 7) IN (${covered.map(() => "?").join(",")})
+           AND ${accountFilter("t", hid)}`
+      )
+      .get(...covered) as { income: number | null; spending: number | null };
+    avgIncome = Math.round((totals.income ?? 0) / n);
+    avgSpending = Math.round((totals.spending ?? 0) / n);
+  }
+
+  const balances = { checking: 0, savings: 0, cash: 0, investment: 0, retirement: 0, credit: 0, loan: 0, other: 0 };
+  const rows = db
+    .prepare(
+      "SELECT type, COALESCE(SUM(balance_cents), 0) AS total FROM accounts WHERE household_id = ? AND archived = 0 GROUP BY type"
+    )
+    .all(hid) as Array<{ type: string; total: number }>;
+  let netWorth = 0;
+  for (const r of rows) {
+    netWorth += r.total;
+    if (r.type in balances) balances[r.type as keyof typeof balances] += r.total;
+    else balances.other += r.total;
+  }
+
+  return {
+    data_ok: avgIncome > 0 || avgSpending > 0,
+    months_sampled: n,
+    avg_income_cents: avgIncome,
+    avg_spending_cents: avgSpending,
+    balances,
+    net_worth_cents: netWorth
+  };
+}

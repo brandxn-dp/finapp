@@ -6,6 +6,7 @@ import Transactions from "./pages/Transactions";
 import Budget from "./pages/Budget";
 import Debts from "./pages/Debts";
 import Savings from "./pages/Savings";
+import Fire from "./pages/Fire";
 import Settings from "./pages/Settings";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/budget" element={<Budget />} />
         <Route path="/debts" element={<Debts />} />
         <Route path="/savings" element={<Savings />} />
+        <Route path="/fire" element={<Fire />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/admin" element={me.is_admin ? <Admin /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

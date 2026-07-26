@@ -68,7 +68,10 @@ export default function Debts() {
    * category cuts. If leftover is negative, cuts/income first close that gap;
    * only the remainder goes to debt. Never below zero.
    */
-  const availableCents = leftoverCents + extraIncomeCents + cutSavingsCents;
+  // Minimum payments on your debts are already owed each month, so they come out
+  // before anything "extra" can go toward paying debt down faster.
+  const minPaymentsCents = plan?.min_payments_cents ?? 0;
+  const availableCents = leftoverCents + extraIncomeCents + cutSavingsCents - minPaymentsCents;
   const totalExtraCents = Math.max(0, availableCents);
 
   // Baseline: minimum payments only — the "do nothing different" yardstick
@@ -159,6 +162,7 @@ export default function Debts() {
             leftoverCents={leftoverCents}
             cutSavingsCents={cutSavingsCents}
             extraIncomeCents={extraIncomeCents}
+            minPaymentsCents={minPaymentsCents}
             totalExtraCents={totalExtraCents}
             simBusy={simBusy}
           />
@@ -290,6 +294,7 @@ function PlanCard({
   leftoverCents,
   cutSavingsCents,
   extraIncomeCents,
+  minPaymentsCents,
   totalExtraCents,
   simBusy
 }: {
@@ -307,6 +312,7 @@ function PlanCard({
   leftoverCents: number;
   cutSavingsCents: number;
   extraIncomeCents: number;
+  minPaymentsCents: number;
   totalExtraCents: number;
   simBusy: boolean;
 }) {
@@ -469,6 +475,7 @@ function PlanCard({
           <Row label={budgetMode ? "Leftover after budgets" : "Current leftover"} cents={leftoverCents} tone={deficit ? "bad" : undefined} />
           {cutSavingsCents > 0 && <Row label="Freed by cuts" cents={cutSavingsCents} sign />}
           {extraIncomeCents > 0 && <Row label="Extra income" cents={extraIncomeCents} sign />}
+          {minPaymentsCents > 0 && <Row label="Minimum debt payments (already owed)" cents={-minPaymentsCents} tone="bad" />}
           <div className="mt-1 flex items-center justify-between border-t border-accent/20 pt-1.5 font-medium text-ink">
             <span>Total extra toward debt</span>
             <span className="tnum font-display text-lg font-semibold text-accent">{money(totalExtraCents)}/mo</span>

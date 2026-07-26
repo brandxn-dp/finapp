@@ -13,9 +13,10 @@
  */
 
 export type Filing = "single" | "married" | "head";
-export type StateCode = "NJ" | "IL";
+export type StateCode = "NJ" | "IL" | "NY" | "NYC";
 export type Freq = "weekly" | "biweekly" | "semimonthly" | "monthly" | "annual";
 export type PayFreq = "weekly" | "biweekly" | "semimonthly" | "monthly";
+export type PayType = "hourly" | "salary";
 
 export interface Benefit {
   id: string;
@@ -30,16 +31,33 @@ export interface Benefit {
 export interface Job {
   id: string;
   name: string;
+  payType?: PayType; // "hourly" (default) or "salary"
   hourlyCents: number;
   hoursPerWeek: number;
+  annualSalaryCents?: number; // used when payType === "salary"
   payFreq: PayFreq;
   benefits: Benefit[];
+}
+
+/** Non-taxed cash / side income added straight to take-home. */
+export interface CashIncome {
+  id: string;
+  name: string;
+  amountCents: number;
+  freq: Freq;
 }
 
 export interface IncomeProfile {
   filing: Filing;
   state: StateCode;
   jobs: Job[];
+  cash?: CashIncome[];
+}
+
+/** Annual gross wages for a job (from a salary, or hourly × hours × 52). */
+export function jobGrossAnnualCents(job: Job): number {
+  if (job.payType === "salary") return Math.round(job.annualSalaryCents ?? 0);
+  return Math.round(job.hourlyCents * job.hoursPerWeek * 52);
 }
 
 // ---------- constants (2025) ----------
@@ -127,6 +145,65 @@ const NJ_EXEMPTION: Record<Filing, number> = { single: 1000, married: 2000, head
 const IL_RATE = 0.0495; // flat since 2017
 const IL_EXEMPTION: Record<Filing, number> = { single: 2775, married: 5550, head: 2775 };
 
+// New York State (2025). NY has its own standard deduction.
+const NY_STD: Record<Filing, number> = { single: 8000, married: 16050, head: 11200 };
+const NY_BRACKETS: Record<Filing, Array<[number, number]>> = {
+  single: [
+    [0, 0.04],
+    [8500, 0.045],
+    [11700, 0.0525],
+    [13900, 0.055],
+    [80650, 0.06],
+    [215400, 0.0685],
+    [1077550, 0.0965],
+    [5000000, 0.103],
+    [25000000, 0.109]
+  ],
+  married: [
+    [0, 0.04],
+    [17150, 0.045],
+    [23600, 0.0525],
+    [27900, 0.055],
+    [161550, 0.06],
+    [323200, 0.0685],
+    [2155350, 0.0965],
+    [5000000, 0.103],
+    [25000000, 0.109]
+  ],
+  head: [
+    [0, 0.04],
+    [12800, 0.045],
+    [17650, 0.0525],
+    [20900, 0.055],
+    [107650, 0.06],
+    [269300, 0.0685],
+    [1616450, 0.0965],
+    [5000000, 0.103],
+    [25000000, 0.109]
+  ]
+};
+// New York City resident tax (2025), applied to NY taxable income.
+const NYC_BRACKETS: Record<Filing, Array<[number, number]>> = {
+  single: [
+    [0, 0.03078],
+    [12000, 0.03762],
+    [25000, 0.03819],
+    [50000, 0.03876]
+  ],
+  married: [
+    [0, 0.03078],
+    [21600, 0.03762],
+    [45000, 0.03819],
+    [90000, 0.03876]
+  ],
+  head: [
+    [0, 0.03078],
+    [14400, 0.03762],
+    [30000, 0.03819],
+    [60000, 0.03876]
+  ]
+};
+
 export const STATE_TAX: Record<StateCode, StateTax> = {
   NJ: {
     name: "New Jersey",
@@ -136,6 +213,17 @@ export const STATE_TAX: Record<StateCode, StateTax> = {
   IL: {
     name: "Illinois",
     tax: (stateWages, filing) => Math.max(0, stateWages - IL_EXEMPTION[filing]) * IL_RATE
+  },
+  NY: {
+    name: "New York",
+    tax: (stateWages, filing) => bracketTax(Math.max(0, stateWages - NY_STD[filing]), NY_BRACKETS[filing])
+  },
+  NYC: {
+    name: "New York City",
+    tax: (stateWages, filing) => {
+      const taxable = Math.max(0, stateWages - NY_STD[filing]);
+      return bracketTax(taxable, NY_BRACKETS[filing]) + bracketTax(taxable, NYC_BRACKETS[filing]);
+    }
   }
 };
 
@@ -173,6 +261,7 @@ export interface TakeHome {
   medicareCents: number;
   stateCents: number;
   totalTaxCents: number;
+  cashAnnualCents: number; // untaxed cash income added to take-home
   netAnnualCents: number;
   netMonthlyCents: number;
   grossMonthlyCents: number;
@@ -189,7 +278,7 @@ export function computeTakeHome(p: IncomeProfile): TakeHome {
   let postTaxD = 0;
 
   for (const job of p.jobs) {
-    grossD += (job.hourlyCents / 100) * job.hoursPerWeek * 52;
+    grossD += jobGrossAnnualCents(job) / 100;
     for (const b of job.benefits) {
       const annual = (b.amountCents / 100) * FREQ_PER_YEAR[b.freq];
       if (b.timing === "pre") {
@@ -218,8 +307,10 @@ export function computeTakeHome(p: IncomeProfile): TakeHome {
   const stateD = STATE_TAX[p.state].tax(stateWagesD, filing);
 
   const totalTaxD = federalD + socialSecurityD + medicareD + stateD;
-  // Take-home = what lands in your bank = gross − taxes − every deduction.
-  const netAnnualD = grossD - totalTaxD - preTaxD - postTaxD;
+  // Untaxed cash / side income adds straight to take-home.
+  const cashD = (p.cash ?? []).reduce((s, ci) => s + (ci.amountCents / 100) * FREQ_PER_YEAR[ci.freq], 0);
+  // Take-home = what lands in your bank = wages − taxes − every deduction + cash.
+  const netAnnualD = grossD - totalTaxD - preTaxD - postTaxD + cashD;
 
   return {
     grossAnnualCents: c(grossD),
@@ -230,6 +321,7 @@ export function computeTakeHome(p: IncomeProfile): TakeHome {
     medicareCents: c(medicareD),
     stateCents: c(stateD),
     totalTaxCents: c(totalTaxD),
+    cashAnnualCents: c(cashD),
     netAnnualCents: c(netAnnualD),
     netMonthlyCents: c(netAnnualD / 12),
     grossMonthlyCents: c(grossD / 12),

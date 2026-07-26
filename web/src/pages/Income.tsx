@@ -6,24 +6,28 @@ import { useChartColors } from "../lib/theme";
 import { Button, Card, Icon, Input, PageHeader, Select, Spinner, useToast } from "../components/ui";
 import {
   computeTakeHome,
+  jobGrossAnnualCents,
   BENEFIT_FREQS,
   FILINGS,
   PAY_FREQS,
   STATES,
   TAX_YEAR,
   type Benefit,
+  type CashIncome,
   type Filing,
   type Freq,
   type IncomeProfile,
   type Job,
   type PayFreq,
+  type PayType,
   type StateCode
 } from "../lib/tax";
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
 const newBenefit = (): Benefit => ({ id: uid(), name: "", amountCents: 0, freq: "monthly", timing: "pre" });
-const newJob = (name = "Job"): Job => ({ id: uid(), name, hourlyCents: 0, hoursPerWeek: 40, payFreq: "biweekly", benefits: [] });
-const DEFAULT: IncomeProfile = { filing: "single", state: "NJ", jobs: [newJob("My job")] };
+const newJob = (name = "Job"): Job => ({ id: uid(), name, payType: "hourly", hourlyCents: 0, hoursPerWeek: 40, annualSalaryCents: 0, payFreq: "biweekly", benefits: [] });
+const newCash = (): CashIncome => ({ id: uid(), name: "", amountCents: 0, freq: "monthly" });
+const DEFAULT: IncomeProfile = { filing: "single", state: "NJ", jobs: [newJob("My job")], cash: [] };
 
 export default function Income() {
   const navigate = useNavigate();
@@ -55,6 +59,10 @@ export default function Income() {
     setProfile((prev) => ({ ...prev!, jobs: prev!.jobs.map((j) => (j.id === id ? { ...j, ...p } : j)) }));
   const addJob = () => patch({ jobs: [...profile.jobs, newJob(`Job ${profile.jobs.length + 1}`)] });
   const removeJob = (id: string) => patch({ jobs: profile.jobs.filter((j) => j.id !== id) });
+  const patchCash = (id: string, p: Partial<CashIncome>) =>
+    patch({ cash: (profile.cash ?? []).map((ci) => (ci.id === id ? { ...ci, ...p } : ci)) });
+  const addCash = () => patch({ cash: [...(profile.cash ?? []), newCash()] });
+  const removeCash = (id: string) => patch({ cash: (profile.cash ?? []).filter((ci) => ci.id !== id) });
 
   const save = async () => {
     setBusy(true);
@@ -147,6 +155,32 @@ export default function Income() {
         <Icon name="plus" size={14} /> Add another job
       </Button>
 
+      {/* Cash / untaxed income */}
+      <Card title="Cash & other untaxed income">
+        <p className="mb-2 text-xs text-ink3">
+          Money you receive that isn't taxed here — cash tips, side gigs, gifts. Added straight to your take-home.
+        </p>
+        <div className="space-y-2">
+          {(profile.cash ?? []).map((ci) => (
+            <div key={ci.id} className="grid grid-cols-2 items-center gap-2 rounded-lg bg-surface2/40 p-2 sm:grid-cols-[1.6fr_1fr_1.1fr_auto]">
+              <Input value={ci.name} onChange={(e) => patchCash(ci.id, { name: e.target.value })} placeholder="e.g. Cash tips" className="!h-8 !text-xs" />
+              <Dollar cents={ci.amountCents} onChange={(v) => patchCash(ci.id, { amountCents: v })} small />
+              <Select value={ci.freq} onChange={(e) => patchCash(ci.id, { freq: e.target.value as Freq })} className="!h-8 !text-xs">
+                {BENEFIT_FREQS.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </Select>
+              <button className="justify-self-center text-ink3 hover:text-bad" onClick={() => removeCash(ci.id)}>
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button className="mt-2 flex items-center gap-1 text-xs text-accent hover:underline" onClick={addCash}>
+          <Icon name="plus" size={12} /> Add cash income
+        </button>
+      </Card>
+
       {/* Breakdown */}
       <Card
         title={`Where your money goes (${TAX_YEAR})`}
@@ -184,6 +218,7 @@ export default function Income() {
           <Row label={`${STATES.find((s) => s.code === profile.state)?.name} state tax`} value={`− ${per(th.stateCents)}`} />
           {th.preTaxAnnualCents > 0 && <Row label="Pre-tax benefits (401k, insurance…)" value={`− ${per(th.preTaxAnnualCents)}`} />}
           {th.postTaxAnnualCents > 0 && <Row label="Post-tax deductions" value={`− ${per(th.postTaxAnnualCents)}`} />}
+          {th.cashAnnualCents > 0 && <Row label="Cash / untaxed income" value={`+ ${per(th.cashAnnualCents)}`} />}
           <div className="my-1 border-t border-line" />
           <Row label={`Take-home pay (${periodLabel})`} value={per(th.netAnnualCents)} bold accent />
         </div>
@@ -237,8 +272,9 @@ function JobCard({
   onChange: (p: Partial<Job>) => void;
   onRemove: () => void;
 }) {
-  const grossWeek = (job.hourlyCents / 100) * job.hoursPerWeek;
-  const grossYear = grossWeek * 52;
+  const salary = job.payType === "salary";
+  const grossYear = jobGrossAnnualCents(job) / 100;
+  const grossWeek = grossYear / 52;
   const perYear = PAY_FREQS.find((f) => f.value === job.payFreq)?.perYear ?? 26;
   const perCheck = grossYear / perYear;
 
@@ -262,20 +298,36 @@ function JobCard({
           <Input value={job.name} onChange={(e) => onChange({ name: e.target.value })} className="w-full" placeholder="e.g. Barista" />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink2">Hourly wage</span>
-          <Dollar cents={job.hourlyCents} onChange={(v) => onChange({ hourlyCents: v })} />
+          <span className="mb-1 block text-xs font-medium text-ink2">Pay type</span>
+          <Select value={job.payType ?? "hourly"} onChange={(e) => onChange({ payType: e.target.value as PayType })} className="w-full">
+            <option value="hourly">Hourly</option>
+            <option value="salary">Salary</option>
+          </Select>
         </label>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink2">Hours per week</span>
-          <Input
-            type="number"
-            value={job.hoursPerWeek}
-            min={0}
-            max={100}
-            onChange={(e) => onChange({ hoursPerWeek: Math.max(0, Number(e.target.value) || 0) })}
-            className="w-full"
-          />
-        </label>
+        {salary ? (
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-ink2">Annual salary</span>
+            <Dollar cents={job.annualSalaryCents ?? 0} onChange={(v) => onChange({ annualSalaryCents: v })} />
+          </label>
+        ) : (
+          <>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-ink2">Hourly wage</span>
+              <Dollar cents={job.hourlyCents} onChange={(v) => onChange({ hourlyCents: v })} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-ink2">Hours per week</span>
+              <Input
+                type="number"
+                value={job.hoursPerWeek}
+                min={0}
+                max={100}
+                onChange={(e) => onChange({ hoursPerWeek: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-full"
+              />
+            </label>
+          </>
+        )}
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-ink2">Paid</span>
           <Select value={job.payFreq} onChange={(e) => onChange({ payFreq: e.target.value as PayFreq })} className="w-full">
@@ -286,7 +338,7 @@ function JobCard({
         </label>
       </div>
 
-      {job.hourlyCents > 0 && (
+      {grossYear > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Mini label="Per week" value={moneyWhole(Math.round(grossWeek * 100))} />
           <Mini label="Per month" value={moneyWhole(Math.round((grossYear / 12) * 100))} />
